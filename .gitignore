@@ -1,0 +1,16 @@
+*
+
+!LICENSE
+!README.md
+!auth/
+!env.example/
+!env.example/**
+!compose.yml
+!shell.nix
+!.envrc
+!conf/
+!conf/comfyui/
+!conf/searxng/
+!conf/comfyui/download-models.txt.example
+!conf/searxng/settings.yml.example
+!conf/searxng/uwsgi.ini.example

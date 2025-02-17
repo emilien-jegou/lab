@@ -1,0 +1,349 @@
+# This is for windmill
+x-logging: &default-logging
+  driver: "json-file"
+  options:
+    max-size: "${LOG_MAX_SIZE:-20m}"
+    max-file: "${LOG_MAX_FILE:-10}"
+    compress: "true"
+
+
+services:
+  auth:
+    build:
+      context: ./auth
+      dockerfile: Dockerfile
+    env_file: env/auth.env
+    labels:
+      - "com.centurylinklabs.watchtower.enable=false"
+    restart: unless-stopped
+
+  baserow:
+    container_name: baserow
+    image: baserow/baserow:1.33.2
+    environment:
+      BASEROW_PUBLIC_URL: 'http://localhost:6601'
+    ports:
+      - "6601:80"
+
+    volumes:
+      - baserow_data:/baserow/data
+
+  db:
+    depends_on:
+      - watchtower
+    env_file: env/db.env
+    healthcheck:
+      interval: 30s
+      retries: 5
+      start_period: 20s
+      test: ["CMD-SHELL", "pg_isready -d $${POSTGRES_DB} -U $${POSTGRES_USER}"]
+      timeout: 5s
+    image: pgvector/pgvector:pg15
+    restart: unless-stopped
+    volumes:
+      - db_data:/var/lib/postgresql/data
+
+  docling:
+    env_file: env/docling.env
+    healthcheck:
+      interval: 30s
+      retries: 5
+      start_period: 10s
+      test: curl --fail http://localhost:5001/health || exit 1
+      timeout: 5s
+    image: quay.io/docling-project/docling-serve:latest
+    ports:
+      - 5001:5001
+    restart: unless-stopped
+
+  openwebui:
+    depends_on:
+      - auth
+      - docling
+      - db
+      #- ollama
+      - searxng
+      - tika
+      - watchtower
+    env_file: env/openwebui.env
+    ports:
+      - 6600:8080
+    healthcheck:
+      interval: 30s
+      retries: 5
+      start_period: 10s
+      test: curl --fail http://localhost:8080/health || exit 1
+      timeout: 3s
+    image: ghcr.io/open-webui/open-webui:cuda
+    restart: unless-stopped
+    volumes:
+      - openwebui:/app/backend/data
+
+  redis:
+    depends_on:
+      - watchtower
+    env_file: env/redis.env
+    healthcheck:
+      interval: 30s
+      retries: 5
+      start_period: 20s
+      test: ["CMD-SHELL", "redis-cli ping | grep PONG"]
+      timeout: 3s
+    image: redis/redis-stack:latest
+    restart: unless-stopped
+    volumes:
+      - redis:/data
+
+  searxng:
+    cap_add:
+      - CHOWN
+      - SETGID
+      - SETUID
+      - DAC_OVERRIDE
+    cap_drop:
+      - ALL
+    env_file: env/searxng.env
+    depends_on:
+      - redis
+      - watchtower
+    healthcheck:
+      interval: 30s
+      retries: 5
+      start_period: 10s
+      test: curl --fail http://localhost:8080/ || exit 1
+      timeout: 3s
+    image: searxng/searxng:latest
+    logging:
+      driver: "json-file"
+      options:
+        max-size: "1m"
+        max-file: "1"
+    restart: unless-stopped
+    volumes:
+      - ./conf/searxng/settings.yml:/etc/searxng/settings.yml:rw
+      - ./conf/searxng/uwsgi.ini:/etc/searxng/uwsgi.ini:rw
+
+  tika:
+    env_file: env/tika.env
+    healthcheck:
+      interval: 30s
+      retries: 5
+      start_period: 5s
+      test: curl --fail http://localhost:9998/tika || exit 1
+      timeout: 5s
+    image: apache/tika:latest-full
+    ports:
+      - 9998:9998
+    restart: unless-stopped
+
+  watchtower:
+    command: --cleanup --debug --interval 300
+    env_file: env/watchtower.env
+    image: containrrr/watchtower
+    restart: unless-stopped
+    volumes:
+      - /var/run/docker.sock:/var/run/docker.sock
+
+  # TODO: we want to use the same DB for windmill and openwebui since they both use postgres (rn openwebui use pgvec 15 and windmill use postgres 16).
+  windmill_db:
+    deploy:
+      # To use an external database, set replicas to 0 and set DATABASE_URL to the external database url in the .env file
+      replicas: 1
+    image: postgres:16
+    #shm_size: 1g
+    restart: unless-stopped
+    volumes:
+      - windmill_db_data_2:/var/lib/postgresql/data
+    expose:
+      - 5432
+    ports:
+      - 5432:5432
+    env_file: env/windmill-db.env
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U postgres"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+    logging: *default-logging
+
+  windmill_server:
+    env_file: env/windmill.env
+    image: ghcr.io/windmill-labs/windmill:main
+    pull_policy: always
+    deploy:
+      replicas: 1
+    restart: unless-stopped
+    expose:
+      - 8000
+      - 2525
+    environment:
+      - MODE=server
+    depends_on:
+      windmill_db:
+        condition: service_healthy
+    volumes:
+      - windmill_worker_logs:/tmp/windmill/logs
+    logging: *default-logging
+
+  windmill_worker:
+    env_file: env/windmill.env
+    image: ghcr.io/windmill-labs/windmill:main
+    pull_policy: always
+    deploy:
+      replicas: 1
+      resources:
+        limits:
+          cpus: "1"
+          memory: 2048M
+          # for GB, use syntax '2Gi'
+    restart: unless-stopped
+    environment:
+      - MODE=worker
+      - WORKER_GROUP=default
+    depends_on:
+      windmill_db:
+        condition: service_healthy
+    # to mount the worker folder to debug, KEEP_JOB_DIR=true and mount /tmp/windmill
+    volumes:
+      # mount the docker socket to allow to run docker containers from within the workers
+      - /var/run/docker.sock:/var/run/docker.sock
+      - windmill_worker_dependency_cache:/tmp/windmill/cache
+      - windmill_worker_logs:/tmp/windmill/logs
+    logging: *default-logging
+
+  ## This worker is specialized for "native" jobs. Native jobs run in-process and thus are much more lightweight than other jobs
+  windmill_worker_native:
+    # Use ghcr.io/windmill-labs/windmill-ee:main for the ee
+    env_file: env/windmill.env
+    image: ghcr.io/windmill-labs/windmill:main
+    pull_policy: always
+    deploy:
+      replicas: 1
+      resources:
+        limits:
+          cpus: "1"
+          memory: 2048M
+          # for GB, use syntax '2Gi'
+    restart: unless-stopped
+    environment:
+      - MODE=worker
+      - WORKER_GROUP=native
+      - NUM_WORKERS=8
+      - SLEEP_QUEUE=200
+    depends_on:
+      windmill_db:
+        condition: service_healthy
+    volumes:
+      - windmill_worker_logs:/tmp/windmill/logs
+    logging: *default-logging
+
+  lsp:
+    image: ghcr.io/windmill-labs/windmill-lsp:latest
+    pull_policy: always
+    restart: unless-stopped
+    expose:
+      - 3001
+    volumes:
+      - windmill_lsp_cache:/pyls/.cache
+    logging: *default-logging
+
+  caddy:
+    image: ghcr.io/windmill-labs/caddy-l4:latest
+    restart: unless-stopped
+    volumes:
+      - ./conf/windmill/Caddyfile:/etc/caddy/Caddyfile
+      - windmill_caddy_data:/data
+      # - ./certs:/certs # Provide custom certificate files like cert.pem and key.pem to enable HTTPS - See the corresponding section in the Caddyfile
+    ports:
+      # To change the exposed port, simply change 80:80 to <desired_port>:80. No other changes needed
+      - 6602:80
+      - 25:25
+      # - 443:443 # Uncomment to enable HTTPS handling by Caddy
+    environment:
+      - BASE_URL=":80"
+      # - BASE_URL=":443" # uncomment and comment line above to enable HTTPS via custom certificate and key files
+      # - BASE_URL=mydomain.com # Uncomment and comment line above to enable HTTPS handling by Caddy
+    logging: *default-logging
+
+  comfyui:
+    depends_on:
+      - watchtower
+    deploy:
+      replicas: 0
+      resources:
+        reservations:
+          devices:
+            - driver: nvidia
+              count: 1
+              capabilities: [gpu]
+    env_file: env/comfyui.env
+    image: yanwk/comfyui-boot:cu124-slim
+    ports:
+      - 6004:8188
+    restart: unless-stopped
+    volumes:
+      - comfyui:/root/ComfyUI
+      - ./conf/comfyui/download-models.txt:/runner-scripts/download-models.txt
+
+  ollama:
+    depends_on:
+      - watchtower
+    deploy:
+      replicas: 0
+      resources:
+        reservations:
+          devices:
+            - driver: nvidia
+              count: 1
+              capabilities: [gpu]
+    env_file: env/ollama.env
+    healthcheck:
+      interval: 30s
+      retries: 5
+      start_period: 10s
+      test: curl --fail http://localhost:11434/api/version || exit 1
+      timeout: 3s
+    image: ollama/ollama:latest
+    ports:
+      - 11434:11434
+    restart: unless-stopped
+    volumes:
+      - ollama:/root/.ollama
+
+  crawl4ai:
+    image: unclecode/crawl4ai:latest
+    container_name: crawl4ai
+    ports:
+      - "6603:11235"
+    shm_size: "1g"
+    env_file: env/crawl4ai.env
+    volumes:
+      - /dev/shm:/dev/shm  # Chromium performance
+    deploy:
+      resources:
+        limits:
+          memory: 4G
+        reservations:
+          memory: 1G
+    restart: unless-stopped
+    healthcheck:
+      test: ["CMD", "curl", "-f", "http://localhost:11235/health"]
+      interval: 30s
+      timeout: 10s
+      retries: 3
+      start_period: 40s
+    user: "appuser"
+
+volumes:
+  windmill_db_data_2: null
+  windmill_worker_dependency_cache: null
+  windmill_worker_logs: null
+  windmill_index: null
+  windmill_lsp_cache: null
+  windmill_caddy_data: null
+  baserow_data: null
+  db_data: null
+  openwebui: null
+  redis: null
+  comfyui: null
+  ollama: null
