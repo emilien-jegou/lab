@@ -1,15 +1,115 @@
-# Lab starter
+# Local lab
+
+Subject to change -- fork it 👍
+
+```mermaid
+flowchart TB
+    %% =========================================================================
+    %% STYLING & CLASSES
+    %% =========================================================================
+    classDef client fill:#eceff1,stroke:#607d8b,stroke-width:2px,color:#263238;
+    classDef edge fill:#e3f2fd,stroke:#1e88e5,stroke-width:2px,color:#0d47a1;
+    classDef iam fill:#f3e5f5,stroke:#8e24aa,stroke-width:2px,color:#4a148c;
+    classDef proxy fill:#fff3e0,stroke:#fb8c00,stroke-width:2px,color:#e65100;
+    classDef app fill:#e8f5e9,stroke:#43a047,stroke-width:2px,color:#1b5e20;
+    classDef data fill:#fbe9e7,stroke:#d84315,stroke-width:2px,color:#bf360c;
+
+    %% =========================================================================
+    %% 0. EXTERNAL CLIENT
+    %% =========================================================================
+    User(["🌐 Browser / Client<br>(*.localhost:8000)"]):::client
+
+    %% =========================================================================
+    %% 1. INGRESS & EDGE GATEWAY TIER
+    %% =========================================================================
+    subgraph EdgeTier [" 1. Ingress & Edge Layer "]
+        Pingap["🔀 pingora-portal (Pingap)<br>Port: 8000 (HTTP) / 3018 (Admin)"]:::edge
+    end
+
+    User -->|"HTTP Requests (:8000)"| Pingap
+
+    %% =========================================================================
+    %% 2. IAM & AUTHENTICATION TIER
+    %% =========================================================================
+    subgraph IamTier [" 2. IAM & Security Plane "]
+        Kanidm["🔑 kanidm (IdP)<br>Port: 8443 (HTTPS) / 3636 (LDAP)"]:::iam
+        Certs["📜 kanidm-certs<br>(Self-signed generator)"]:::iam
+        Certs -.->|"Mounts Certs"| Kanidm
+        
+        OAuth2Proxy["🛡️ unified-auth-proxy (oauth2-proxy)<br>Port: 4180 | Cookie: *.localhost"]:::proxy
+    end
+
+    %% Edge to IAM Routing
+    Pingap -->|"Host: idm.localhost"| Kanidm
+    Pingap -->|"Host: surrealist.localhost<br>Host: oxicloud.localhost"| OAuth2Proxy
+
+    %% OAuth2 Proxy <-> Kanidm Backchannel
+    OAuth2Proxy <-->|"OIDC Discovery & Token Exchange<br>(/oauth2/openid/unified_proxy)"| Kanidm
+
+    %% =========================================================================
+    %% 3. APPLICATION TIER
+    %% =========================================================================
+    subgraph AppTier [" 3. Application Tier "]
+        %% Native OIDC Apps
+        OpenObserve["📊 openobserve<br>Port: 5080 (Native OIDC)"]:::app
+        
+        %% IAP Protected Apps
+        Surrealist["💻 surrealist (Web UI)<br>Port: 8080 (Protected)"]:::app
+        Oxicloud["☁️ oxicloud (Files)<br>Port: 8086 (Protected)"]:::app
+
+        %% Custom / Internal Apps
+        LabApp["🧪 lab (Bun App)<br>Port: 3000 / 6605"]:::app
+        ImgProxy["🖼️ imgproxy<br>Port: 8080"]:::app
+    end
+
+    %% Direct Routes through Pingap
+    Pingap -->|"Host: openobserve.localhost"| OpenObserve
+    Pingap -->|"Host: lab.localhost"| LabApp
+
+    %% Direct OIDC Flow for Native Apps
+    OpenObserve <-->|"Direct OIDC SSO Flow<br>(Client Secret / Tokens)"| Kanidm
+
+    %% Protected Upstream Routing from oauth2-proxy
+    OAuth2Proxy -->|"Authenticated Upstream"| Surrealist
+    OAuth2Proxy -->|"Authenticated Upstream"| Oxicloud
+
+    %% =========================================================================
+    %% 4. DATA, TELEMETRY & STORAGE PLANE (INTERNAL)
+    %% =========================================================================
+    subgraph DataTier [" 4. Data, Message & Telemetry Plane (Internal) "]
+        SurrealDB[("🗄️ surrealdb<br>Port: 6800 / 8200")]:::data
+        OxicloudDB[("🐘 oxicloud-db (Postgres)<br>Port: 5432")]:::data
+        Garage[("📦 garage (S3 Object Store)<br>Port: 3900 / 3902")]:::data
+        Valkey[("⚡ valkey (Redis Cache)<br>Port: 6379")]:::data
+        Iggy[("📨 iggy (Message Stream)<br>Port: 3000 / 8090")]:::data
+        Vector["🚚 vector (Telemetry Shipper)<br>Port: 8686 / 4317"]:::data
+    end
+
+    %% Service-to-Service Connections
+    Surrealist -->|"WebSocket / SQL Queries"| SurrealDB
+    Oxicloud -->|"SQL"| OxicloudDB
+    Oxicloud -->|"S3 API"| Garage
+    ImgProxy -->|"Fetch Images"| Garage
+
+    LabApp --> SurrealDB
+    LabApp --> Valkey
+    LabApp --> Iggy
+    LabApp --> Garage
+    LabApp --> Oxicloud
+    LabApp --> ImgProxy
+
+    %% Telemetry pipeline
+    Vector -->|"Ingest Logs & Metrics"| OpenObserve
+    LabApp -.->|"Logs / Spans"| Vector
+
+    %% Optional JWKS Bearer Token Verification
+    Kanidm -.->|"JWKS Public Keys for Token Validation"| SurrealDB
+```
 
 ## Project Overview
 
 This Lab Starter comes with the following:
-- **Windmill**: Workflow automation and scheduling.
-- **OpenWebUI**: A user-friendly frontend for interacting with local LLMs.
-- **Baserow**: No-code database for structured data collaboration.
-- **Crawl4AI**: Automated web crawling tailored for AI data ingestion.
-- **Watchtower**: Automatically updates running containers with the latest images.
-- **ComfyUI (optional)**: Node-based UI for generative AI workflows.
-- **Ollama (optional)**: Lightweight LLM runtime for local model serving.
+[FILL THIS]
 
 ## Dependencies
 
@@ -17,27 +117,33 @@ Check the [shell.nix](./shell.nix) file.
 
 ## Setup
 
+0. Install the packages requirements via `devenv.nix` file.
 ```sh
-cp conf/searxng/settings.yml.example conf/searxng/settings.yml
-cp conf/searxng/uwsgi.ini.example conf/searxng/uwsgi.ini
-cp conf/comfyui/download-models.txt.example conf/comfyui/download-models.txt
-
-cp -r env.example env
+direnv allow .
 ```
 
-***The environment files can contain sensitive information such as API keys 
-and passwords. Do not check them into source control.
+1. wip -- to fill
 
-3. Add a unique SEARXNG_SEARCH value to your `env/searxng` file
+5. Login to the IDM at `http://idm.localhost:8000` using your newly generated password.
 
-```sh
-docker compose up
+```yaml
+username: admin
+password: generated in step 4.
 ```
 
-This will provide the following services:
-- **openwebui**: http://localhost:6600
-- **baserow**: http://localhost:6601
-- **windmill**: http://localhost:6602
-- **crawl4ai playground**: http://localhost:6603
+Login in the IAM will automatically connect you to all of the app services via the OCIP protocol.
 
-Go to each and set an appropriate login/password
+6. You now have access to all services via localhost:8000
+
+This setup will provide expose the following web application:
+*   **Surrealist**: **http://surrealist.localhost:8000**
+*   **Openobserve**: **http://openobserve.localhost:8000**
+*   **Oxicloud**: **http://oxicloud.localhost:8000**
+
+And open up thoses API urls:
+*   **Lab**: **http://lab.localhost:8000**
+*   **Imgproxy**: **http://imgproxy.localhost:8000**
+
+## More information on current development
+
+I am currently focus in adding workflow automation and client side UI for the lab and workflow visualization.

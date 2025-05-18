@@ -1,0 +1,28 @@
+{
+  "name": "@lab/infra",
+  "version": "1.0.0",
+  "private": true,
+  "type": "module",
+  "scripts": {
+    "dev": "alchemy dev src/alchemy.run.ts",
+    "plan": "alchemy plan src/alchemy.run.ts",
+    "deploy": "alchemy deploy src/alchemy.run.ts",
+    "destroy": "alchemy destroy src/alchemy.run.ts",
+    "provision": "bun run src/provision.ts",
+    "ts.watch": "tsc --noEmit --incremental --preserveWatchOutput --pretty --watch",
+    "format": "prettier --write src/"
+  },
+  "dependencies": {
+    "@effect/platform-bun": "^4.0.0-rc.117",
+    "@effect/platform-node": "^4.0.0-rc.117",
+    "alchemy": "^2.0.0-beta.79",
+    "effect": "^4.0.0-rc.117"
+  },
+  "devDependencies": {
+    "@types/node": "^22.13.0",
+    "typescript": "^5.7.3"
+  },
+  "engines": {
+    "node": ">=20.0.0"
+  }
+}

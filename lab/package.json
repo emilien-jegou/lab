@@ -1,0 +1,43 @@
+{
+  "name": "@lab/app",
+  "module": "index.ts",
+  "type": "module",
+  "private": true,
+  "devDependencies": {
+    "@types/bun": "latest",
+    "@types/ioredis": "^5.0.0"
+  },
+  "peerDependencies": {
+    "typescript": "^5.9.3"
+  },
+  "scripts": {
+    "start": "bun run src/index.ts",
+    "dev": "bun run --watch --no-clear-screen src/index.ts",
+    "lint": "oxlint",
+    "lint.fix": "oxlint --fix",
+    "lint.watch": "oxlint --watch",
+    "ts.watch": "tsc --noEmit --incremental --preserveWatchOutput --pretty --watch"
+  },
+  "dependencies": {
+    "@effect/opentelemetry": "^0.64.1",
+    "@effect/platform-bun": "^0.87.1",
+    "@opentelemetry/exporter-trace-otlp-http": "^0.222.0",
+    "@opentelemetry/exporter-trace-otlp-proto": "^0.222.0",
+    "@opentelemetry/resources": "^2.11.0",
+    "@opentelemetry/sdk-metrics": "^2.5.1",
+    "@opentelemetry/sdk-trace-base": "^2.5.1",
+    "@opentelemetry/sdk-trace-node": "^2.11.0",
+    "@opentelemetry/sdk-trace-web": "^2.5.1",
+    "@opentelemetry/semantic-conventions": "^1.43.0",
+    "@surrealdb/node": "^3.0.1",
+    "apache-iggy": "^0.8.0",
+    "cron-parser": "^5.5.0",
+    "effect": "^3.19.18",
+    "hotscript": "^1.0.13",
+    "ioredis": "^6.0.0",
+    "oxlint": "^1.51.0",
+    "resend": "^6.9.2",
+    "surrealdb": "^2.0.0",
+    "vitest": "^4.0.18"
+  }
+}
