@@ -22,9 +22,9 @@ services:
     image: baserow/baserow:1.33.2
     env_file: env/baserow.env
     environment:
-      BASEROW_PUBLIC_URL: 'http://localhost:6601'
+      BASEROW_PUBLIC_URL: 'http://baserow:80'
     ports:
-      - "6601:80"
+      - "80:80"
     volumes:
       - baserow_data:/baserow/data
 
@@ -113,6 +113,8 @@ services:
       test: curl --fail http://localhost:8080/ || exit 1
       timeout: 3s
     image: searxng/searxng:latest
+    ports:
+      - 6605:8080
     logging:
       driver: "json-file"
       options:
