@@ -1,9 +1,9 @@
 import type { ZodSchema } from 'zod';
 import { z } from 'zod';
+import { addRoute } from '~/utils/server';
 import type { Flow } from '../core/flow';
 import type { Trigger } from '../core/trigger';
 import type { FlowLogger } from '../utils/logger';
-import { addRoute } from '../utils/server';
 
 // Define the types with Zod schema inference
 type InferType<S extends ZodSchema> = z.infer<S>;
@@ -37,7 +37,7 @@ export const webhookTrigger = (
           type: 'webhook',
           schema,
 
-          register: async <Out>(flow: Flow<unknown, Out>, logger: FlowLogger) => {
+          register: async <Out>(_flow: Flow<unknown, Out>, _logger: FlowLogger) => {
             addRoute(method, path, async () => {
               console.log('123');
             });

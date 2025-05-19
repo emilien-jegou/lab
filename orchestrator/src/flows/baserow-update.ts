@@ -8,7 +8,7 @@ const wt = webhookTrigger('/hooks/baserow-update')
   .build();
 
 export default flow('baserow-update')(
-  script('first', async (a: { b: number }): Promise<string> => {
+  script('first', async (_a: { b: number }): Promise<string> => {
     return '123';
   }),
   script('second', async (b: string): Promise<string> => {

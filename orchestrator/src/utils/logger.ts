@@ -244,7 +244,7 @@ class FlowLogger extends EventEmitter {
     );
 
     // Reassign positions
-    for (const [flowId, flow] of sortedFlows) {
+    for (const [_flowId, flow] of sortedFlows) {
       flow.displayStartLine = currentLine;
       currentLine += flow.displayLines || 0;
     }
@@ -319,80 +319,80 @@ class FlowLogger extends EventEmitter {
 }
 
 // Example usage showing concurrent flows
-async function example() {
-  const logger = new FlowLogger();
-
-  // Initialize first flow
-  const flowId1 = logger.initFlow('Flow 1', ['Fetch Data', 'Transform Data', 'Save Results']);
-
-  // Wait a bit before starting the second flow
-  await new Promise((resolve) => setTimeout(resolve, 1000));
-
-  // Initialize second flow (runs concurrently)
-  const flowId2 = logger.initFlow('Flow 2', [
-    'Load Images',
-    'Apply Filters',
-    'Generate Thumbnails',
-  ]);
-
-  // Run both flows concurrently
-  const runFlow1 = async () => {
-    // Job 1
-    logger.log(flowId1, 'Connecting to API...');
-    await new Promise((resolve) => setTimeout(resolve, 800));
-    logger.log(flowId1, 'Downloading data...');
-    await new Promise((resolve) => setTimeout(resolve, 1200));
-    logger.log(flowId1, 'Downloaded 3.2MB of data');
-    await new Promise((resolve) => setTimeout(resolve, 500));
-    logger.completeCurrentJob(flowId1);
-
-    // Job 2
-    logger.log(flowId1, 'Parsing JSON data...');
-    await new Promise((resolve) => setTimeout(resolve, 1000));
-    logger.log(flowId1, 'Applying transformations...');
-    await new Promise((resolve) => setTimeout(resolve, 1500));
-    logger.completeCurrentJob(flowId1);
-
-    // Job 3
-    logger.log(flowId1, 'Connecting to database...');
-    await new Promise((resolve) => setTimeout(resolve, 1200));
-    logger.log(flowId1, 'Writing records...');
-    await new Promise((resolve) => setTimeout(resolve, 1000));
-    logger.completeCurrentJob(flowId1);
-
-    // Clean up when done
-    setTimeout(() => logger.removeFlow(flowId1), 1000);
-  };
-
-  const runFlow2 = async () => {
-    // Job 1
-    logger.log(flowId2, 'Loading 12 images...');
-    await new Promise((resolve) => setTimeout(resolve, 1500));
-    logger.log(flowId2, 'Verifying formats...');
-    await new Promise((resolve) => setTimeout(resolve, 800));
-    logger.completeCurrentJob(flowId2);
-
-    // Job 2
-    logger.log(flowId2, 'Applying blur filter...');
-    await new Promise((resolve) => setTimeout(resolve, 700));
-    logger.log(flowId2, 'Applying color correction...');
-    await new Promise((resolve) => setTimeout(resolve, 1300));
-    logger.completeCurrentJob(flowId2);
-
-    // Job 3
-    logger.log(flowId2, 'Generating thumbnails...');
-    await new Promise((resolve) => setTimeout(resolve, 1800));
-    logger.log(flowId2, 'Optimizing images...');
-    await new Promise((resolve) => setTimeout(resolve, 1000));
-    logger.completeCurrentJob(flowId2);
-
-    // Clean up when done
-    setTimeout(() => logger.removeFlow(flowId2), 1000);
-  };
-
-  // Run both flows
-  await Promise.all([runFlow1(), runFlow2()]);
-}
+//async function example() {
+//  const logger = new FlowLogger();
+//
+//  // Initialize first flow
+//  const flowId1 = logger.initFlow('Flow 1', ['Fetch Data', 'Transform Data', 'Save Results']);
+//
+//  // Wait a bit before starting the second flow
+//  await new Promise((resolve) => setTimeout(resolve, 1000));
+//
+//  // Initialize second flow (runs concurrently)
+//  const flowId2 = logger.initFlow('Flow 2', [
+//    'Load Images',
+//    'Apply Filters',
+//    'Generate Thumbnails',
+//  ]);
+//
+//  // Run both flows concurrently
+//  const runFlow1 = async () => {
+//    // Job 1
+//    logger.log(flowId1, 'Connecting to API...');
+//    await new Promise((resolve) => setTimeout(resolve, 800));
+//    logger.log(flowId1, 'Downloading data...');
+//    await new Promise((resolve) => setTimeout(resolve, 1200));
+//    logger.log(flowId1, 'Downloaded 3.2MB of data');
+//    await new Promise((resolve) => setTimeout(resolve, 500));
+//    logger.completeCurrentJob(flowId1);
+//
+//    // Job 2
+//    logger.log(flowId1, 'Parsing JSON data...');
+//    await new Promise((resolve) => setTimeout(resolve, 1000));
+//    logger.log(flowId1, 'Applying transformations...');
+//    await new Promise((resolve) => setTimeout(resolve, 1500));
+//    logger.completeCurrentJob(flowId1);
+//
+//    // Job 3
+//    logger.log(flowId1, 'Connecting to database...');
+//    await new Promise((resolve) => setTimeout(resolve, 1200));
+//    logger.log(flowId1, 'Writing records...');
+//    await new Promise((resolve) => setTimeout(resolve, 1000));
+//    logger.completeCurrentJob(flowId1);
+//
+//    // Clean up when done
+//    setTimeout(() => logger.removeFlow(flowId1), 1000);
+//  };
+//
+//  const runFlow2 = async () => {
+//    // Job 1
+//    logger.log(flowId2, 'Loading 12 images...');
+//    await new Promise((resolve) => setTimeout(resolve, 1500));
+//    logger.log(flowId2, 'Verifying formats...');
+//    await new Promise((resolve) => setTimeout(resolve, 800));
+//    logger.completeCurrentJob(flowId2);
+//
+//    // Job 2
+//    logger.log(flowId2, 'Applying blur filter...');
+//    await new Promise((resolve) => setTimeout(resolve, 700));
+//    logger.log(flowId2, 'Applying color correction...');
+//    await new Promise((resolve) => setTimeout(resolve, 1300));
+//    logger.completeCurrentJob(flowId2);
+//
+//    // Job 3
+//    logger.log(flowId2, 'Generating thumbnails...');
+//    await new Promise((resolve) => setTimeout(resolve, 1800));
+//    logger.log(flowId2, 'Optimizing images...');
+//    await new Promise((resolve) => setTimeout(resolve, 1000));
+//    logger.completeCurrentJob(flowId2);
+//
+//    // Clean up when done
+//    setTimeout(() => logger.removeFlow(flowId2), 1000);
+//  };
+//
+//  // Run both flows
+//  await Promise.all([runFlow1(), runFlow2()]);
+//}
 
 // Uncomment to run the example
 //example();

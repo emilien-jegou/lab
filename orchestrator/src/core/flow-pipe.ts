@@ -153,7 +153,7 @@ export function flowPipe(...operations: Script[]): Flow<unknown, unknown> {
 
   return {
     kind: 'flow',
-    name: this.name,
+    name: (this as any).name,
     _triggers,
     trigger(t: Trigger<unknown>) {
       _triggers.push(t);

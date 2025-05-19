@@ -6,7 +6,7 @@
   "scripts": {
     "start": "bun src/index.ts",
     "watch": "bun src/index.ts --watch",
-    "dev": "concurrently 'yarn watch' 'yarn lint' 'yarn ts-watch'",
+    "dev": "concurrently 'yarn watch' 'yarn ts-watch'",
     "lint": "eslint \"src/**/*.ts*\"",
     "lint.fix": "npm run lint -- --fix",
     "ts-watch": "tsc --noEmit --incremental --preserveWatchOutput --pretty --watch"
