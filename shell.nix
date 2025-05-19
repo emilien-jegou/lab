@@ -7,5 +7,11 @@ pkgs.mkShell {
     pkgs.docker
     pkgs.docker-compose
     pkgs.git
+
+    # Orchestrator
+    pkgs.bun
+    pkgs.yarn
+    pkgs.nodePackages.typescript-language-server
+    pkgs.vscode-langservers-extracted
   ];
 }

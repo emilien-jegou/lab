@@ -1,0 +1,37 @@
+{
+  "name": "orchestrator",
+  "version": "1.0.0",
+  "main": "src/index.ts",
+  "license": "MIT",
+  "scripts": {
+    "start": "bun src/index.ts",
+    "watch": "bun src/index.ts --watch",
+    "dev": "concurrently 'yarn watch' 'yarn lint' 'yarn ts-watch'",
+    "lint": "eslint \"src/**/*.ts*\"",
+    "lint.fix": "npm run lint -- --fix",
+    "ts-watch": "tsc --noEmit --incremental --preserveWatchOutput --pretty --watch"
+  },
+  "dependencies": {
+    "chalk": "^5.4.1",
+    "fastify": "^5.3.3",
+    "remeda": "^2.21.6",
+    "zod": "^3.24.4"
+  },
+  "devDependencies": {
+    "@types/eslint": "^9.6.1",
+    "@types/node": "^22.15.18",
+    "@typescript-eslint/eslint-plugin": "^8.26.1",
+    "@typescript-eslint/parser": "^8.26.1",
+    "concurrently": "^9.1.2",
+    "eslint": "^8.56",
+    "eslint-config-prettier": "^10.1.1",
+    "eslint-import-resolver-typescript": "^3.8.5",
+    "eslint-plugin-import": "^2.31.0",
+    "eslint-plugin-prettier": "^5.2.3",
+    "eslint-plugin-promise": "^7.2.1",
+    "eslint-plugin-qwik": "^1.13",
+    "eslint-plugin-sonarjs": "^3.0.2",
+    "eslint-plugin-unicorn": "56.0.0",
+    "prettier": "^3.5.3"
+  }
+}
