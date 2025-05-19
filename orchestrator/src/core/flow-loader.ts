@@ -2,11 +2,8 @@ import { readdirSync } from 'fs';
 import { join, extname } from 'path';
 import type { Flow } from './flow';
 
-// Get directory path from import.meta.url
-const __dirname = new URL('.', import.meta.url).pathname;
-
 // Note: On Windows, pathname starts with a leading slash; may need to strip it
-const directory = join(__dirname, '../flows');
+const directory = join(process.cwd(), './src/flows');
 
 export const loadFlows = async (): Promise<Flow<unknown, unknown>[]> => {
   // Read all .ts files and dynamically import them

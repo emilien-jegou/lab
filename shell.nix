@@ -1,5 +1,5 @@
 { pkgs ? import (fetchTarball {
-    url = "https://channels.nixos.org/nixos-24.05/nixexprs.tar.xz";
+    url = "https://channels.nixos.org/nixos-25.05/nixexprs.tar.xz";
   }) {} }:
 
 pkgs.mkShell {

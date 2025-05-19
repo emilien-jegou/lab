@@ -1,9 +1,10 @@
+import type { FastifyReply, FastifyRequest } from 'fastify';
 import type { ZodSchema } from 'zod';
-import { z } from 'zod';
+import { z, ZodError } from 'zod';
+import { addRoute } from '~/utils/server';
 import type { Flow } from '../core/flow';
 import type { Trigger } from '../core/trigger';
-import type { FlowLogger } from '../utils/logger';
-import { addRoute } from '../utils/server';
+import { flowLogFromFlow, type OrchestratorLogger } from '../utils/logger';
 
 // Define the types with Zod schema inference
 type InferType<S extends ZodSchema> = z.infer<S>;
@@ -18,16 +19,41 @@ interface TriggerBuilder {
   build: () => Trigger<unknown>;
 }
 
+type WebhookMethod = 'GET' | 'POST' | 'PUT' | 'DELETE' | 'PATCH';
+
 type WebhookTriggerOptions = {
-  method?: 'GET' | 'POST' | 'PUT' | 'DELETE' | 'PATCH';
+  method?: WebhookMethod;
   token?: string;
 };
+
+const createRegister =
+  <S extends ZodSchema>(path: string, method: WebhookMethod, schema: S) =>
+  async <Out>(flow: Flow<InferType<S>, Out>, logger: OrchestratorLogger) => {
+    addRoute(method, path, async (request: FastifyRequest, reply: FastifyReply) => {
+      const flowLog = flowLogFromFlow(flow);
+      try {
+        const result = schema.parse(request.body) as InferType<S>;
+        const flowLogger = logger.flow(flowLog);
+        flow.run(result, flowLogger);
+      } catch (err) {
+        if (err instanceof ZodError) {
+          reply.status(400).send({
+            error: 'Validation failed',
+            issues: err.errors,
+          });
+        } else {
+          reply.status(500).send({ error: 'Internal server error' });
+        }
+        throw err;
+      }
+    });
+  };
 
 export const webhookTrigger = (
   path: string,
   options: WebhookTriggerOptions = {},
 ): TriggerBuilder => {
-  const method = options.method ?? 'GET';
+  const method = options.method ?? 'POST';
 
   return {
     schema<S extends ZodSchema>(schema: S): TriggerBuilderWithSchema<S> {
@@ -36,12 +62,7 @@ export const webhookTrigger = (
         build: () => ({
           type: 'webhook',
           schema,
-
-          register: async <Out>(flow: Flow<unknown, Out>, logger: FlowLogger) => {
-            addRoute(method, path, async () => {
-              console.log('123');
-            });
-          },
+          register: createRegister(path, method, schema),
         }),
       };
     },
@@ -49,11 +70,7 @@ export const webhookTrigger = (
     build: () => ({
       type: 'webhook',
       schema: z.unknown(),
-      register: async () => {
-        addRoute(method, path, async () => {
-          console.log('456');
-        });
-      },
+      register: createRegister(path, method, z.unknown()),
     }),
   };
 };

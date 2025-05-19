@@ -4,9 +4,8 @@
   "main": "src/index.ts",
   "license": "MIT",
   "scripts": {
-    "start": "bun src/index.ts",
-    "watch": "bun src/index.ts --watch",
-    "dev": "concurrently 'yarn watch' 'yarn lint' 'yarn ts-watch'",
+    "start": "bun run src/index.ts",
+    "watch": "bun run --watch --no-clear-screen src/index.ts",
     "lint": "eslint \"src/**/*.ts*\"",
     "lint.fix": "npm run lint -- --fix",
     "ts-watch": "tsc --noEmit --incremental --preserveWatchOutput --pretty --watch"
@@ -14,7 +13,9 @@
   "dependencies": {
     "chalk": "^5.4.1",
     "fastify": "^5.3.3",
-    "remeda": "^2.21.6",
+    "log-update": "^6.1.0",
+    "ollama": "^0.5.15",
+    "remeda": "^2.21.8",
     "zod": "^3.24.4"
   },
   "devDependencies": {
@@ -22,7 +23,6 @@
     "@types/node": "^22.15.18",
     "@typescript-eslint/eslint-plugin": "^8.26.1",
     "@typescript-eslint/parser": "^8.26.1",
-    "concurrently": "^9.1.2",
     "eslint": "^8.56",
     "eslint-config-prettier": "^10.1.1",
     "eslint-import-resolver-typescript": "^3.8.5",

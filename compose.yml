@@ -8,6 +8,21 @@ x-logging: &default-logging
 
 
 services:
+  orchestrator:
+    image: oven/bun:latest
+    container_name: orchestrator
+    working_dir: /app
+    ports:
+      - "6601:8108"
+    expose:
+     - 8108
+    volumes:
+      - ./orchestrator/:/app
+    command: bash -c "bun run watch"
+    environment:
+      - NODE_ENV=development
+      - FORCE_COLOR=1
+
   auth:
     build:
       context: ./auth
@@ -18,8 +33,8 @@ services:
     restart: unless-stopped
 
   baserow:
-    container_name: baserow
     image: baserow/baserow:1.33.2
+    container_name: baserow
     env_file: env/baserow.env
     environment:
       BASEROW_PUBLIC_URL: 'http://baserow:80'
@@ -29,8 +44,7 @@ services:
       - baserow_data:/baserow/data
 
   db:
-    depends_on:
-      - watchtower
+    image: pgvector/pgvector:pg15
     env_file: env/db.env
     healthcheck:
       interval: 30s
@@ -38,12 +52,14 @@ services:
       start_period: 20s
       test: ["CMD-SHELL", "pg_isready -d $${POSTGRES_DB} -U $${POSTGRES_USER}"]
       timeout: 5s
-    image: pgvector/pgvector:pg15
     restart: unless-stopped
     volumes:
       - db_data:/var/lib/postgresql/data
+    depends_on:
+      - watchtower
 
   docling:
+    image: quay.io/docling-project/docling-serve:latest
     env_file: env/docling.env
     healthcheck:
       interval: 30s
@@ -51,20 +67,12 @@ services:
       start_period: 10s
       test: curl --fail http://localhost:5001/health || exit 1
       timeout: 5s
-    image: quay.io/docling-project/docling-serve:latest
     ports:
       - 5001:5001
     restart: unless-stopped
 
   openwebui:
-    depends_on:
-      - auth
-      - docling
-      - db
-      #- ollama
-      - searxng
-      - tika
-      - watchtower
+    image: ghcr.io/open-webui/open-webui:cuda
     env_file: env/openwebui.env
     ports:
       - 6600:8080
@@ -74,14 +82,20 @@ services:
       start_period: 10s
       test: curl --fail http://localhost:8080/health || exit 1
       timeout: 3s
-    image: ghcr.io/open-webui/open-webui:cuda
     restart: unless-stopped
     volumes:
       - openwebui:/app/backend/data
+    depends_on:
+      - auth
+      - docling
+      - db
+      - ollama
+      - searxng
+      - tika
+      - watchtower
 
   redis:
-    depends_on:
-      - watchtower
+    image: redis/redis-stack:latest
     env_file: env/redis.env
     healthcheck:
       interval: 30s
@@ -89,12 +103,15 @@ services:
       start_period: 20s
       test: ["CMD-SHELL", "redis-cli ping | grep PONG"]
       timeout: 3s
-    image: redis/redis-stack:latest
     restart: unless-stopped
     volumes:
       - redis:/data
+    depends_on:
+      - watchtower
 
   searxng:
+    image: searxng/searxng:latest
+    env_file: env/searxng.env
     cap_add:
       - CHOWN
       - SETGID
@@ -102,7 +119,6 @@ services:
       - DAC_OVERRIDE
     cap_drop:
       - ALL
-    env_file: env/searxng.env
     depends_on:
       - redis
       - watchtower
@@ -112,7 +128,6 @@ services:
       start_period: 10s
       test: curl --fail http://localhost:8080/ || exit 1
       timeout: 3s
-    image: searxng/searxng:latest
     ports:
       - 6605:8080
     logging:
@@ -126,6 +141,7 @@ services:
       - ./conf/searxng/uwsgi.ini:/etc/searxng/uwsgi.ini:rw
 
   tika:
+    image: apache/tika:latest-full
     env_file: env/tika.env
     healthcheck:
       interval: 30s
@@ -133,15 +149,14 @@ services:
       start_period: 5s
       test: curl --fail http://localhost:9998/tika || exit 1
       timeout: 5s
-    image: apache/tika:latest-full
     ports:
       - 9998:9998
     restart: unless-stopped
 
   watchtower:
-    command: --cleanup --debug --interval 300
-    env_file: env/watchtower.env
     image: containrrr/watchtower
+    env_file: env/watchtower.env
+    command: --cleanup --debug --interval 300
     restart: unless-stopped
     volumes:
       - /var/run/docker.sock:/var/run/docker.sock
@@ -268,20 +283,16 @@ services:
     logging: *default-logging
 
   comfyui:
+    image: yanwk/comfyui-boot:cu124-slim
+    env_file: env/comfyui.env
+    devices:
+      - "nvidia.com/gpu=all"
     depends_on:
       - watchtower
     deploy:
       replicas: 0
-      resources:
-        reservations:
-          devices:
-            - driver: nvidia
-              count: 1
-              capabilities: [gpu]
-    env_file: env/comfyui.env
-    image: yanwk/comfyui-boot:cu124-slim
     ports:
-      - 6004:8188
+      - 6604:8188
     restart: unless-stopped
     volumes:
       - comfyui:/root/ComfyUI
@@ -290,15 +301,9 @@ services:
   ollama:
     depends_on:
       - watchtower
-    deploy:
-      replicas: 0
-      resources:
-        reservations:
-          devices:
-            - driver: nvidia
-              count: 1
-              capabilities: [gpu]
     env_file: env/ollama.env
+    devices:
+      - "nvidia.com/gpu=all"
     healthcheck:
       interval: 30s
       retries: 5

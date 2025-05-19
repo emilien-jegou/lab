@@ -1,400 +1,294 @@
-import { EventEmitter } from 'events';
-import readline from 'readline';
+import type { ChalkInstance } from 'chalk';
 import chalk from 'chalk';
+import { createLogUpdate } from 'log-update';
+import * as R from 'remeda';
+import type { Flow } from '~/core/flow';
+import { createAnsiRegex } from './ansi';
+import { genRandomAlphaDecimal } from './random';
 
-// Job status enum
-enum JobStatus {
-  PENDING = 'pending',
-  RUNNING = 'running',
-  COMPLETED = 'completed',
-  FAILED = 'failed',
-}
+type Observer<T> = (value: T) => void;
 
-// Job interface
-interface Job {
-  id: string;
+export type Signal<T> = {
+  get value(): T;
+  set value(value: T);
+  subscribe: (observer: Observer<T>) => () => void; // unsubscribe function
+};
+
+export const createSignal = <T>(initialValue: T): Signal<T> => {
+  let value = initialValue;
+  let observers: Observer<T>[] = [];
+
+  const subscribe = (observer: Observer<T>) => {
+    observers.push(observer);
+    // immediately notify with current value
+    observer(value);
+    return () => {
+      observers = observers.filter((o) => o !== observer);
+    };
+  };
+
+  return {
+    get value() {
+      return value;
+    },
+    set value(newValue: T) {
+      if (value === newValue) return;
+      value = newValue;
+      observers.forEach((observer) => observer(value));
+    },
+    subscribe,
+  };
+};
+
+const createLogManager = () => {
+  const log = createLogUpdate(process.stdout, {
+    showCursor: false,
+  });
+
+  return { log, persist: log.done };
+};
+
+type ScriptStatus =
+  | { kind: 'cancelled' }
+  | { kind: 'pending' }
+  | { kind: 'ongoing'; last?: string }
+  | { kind: 'success' }
+  | { kind: 'failure'; error: string };
+
+type Log = {
+  kind: 'log' | 'info' | 'warn' | 'debug' | 'error';
+  content: string;
+};
+
+type ScriptLog<N extends string = string> = {
+  name: N;
+  logs: Log[];
+  status: ScriptStatus;
+};
+
+type FlowLog<N extends string = string> = {
   name: string;
-  status: JobStatus;
-  logs: string[];
-}
+  scripts: ScriptLog<N>[];
+};
 
-// Flow interface
-interface Flow {
-  id: string;
-  name: string;
-  jobs: Job[];
-  currentJobIndex: number;
-  displayStartLine?: number; // Track where this flow is displayed in console
-  displayLines?: number; // How many lines this flow takes up in console
-}
+const spinnerFrames = ['⠋', '⠙', '⠹', '⠸', '⠼', '⠴', '⠦', '⠧', '⠇', '⠏'];
+const spinnerFrameMs = 30;
 
-class FlowLogger extends EventEmitter {
-  private flows: Map<string, Flow> = new Map();
-  private intervalId: NodeJS.Timeout | null = null;
-  private spinnerFrames = ['⠋', '⠙', '⠹', '⠸', '⠼', '⠴', '⠦', '⠧', '⠇', '⠏'];
-  private spinnerIndex = 0;
-  private totalDisplayLines = 0;
-  private isFirstRender = true;
+const getSpinnerFrame = () => {
+  const index = Math.floor(Date.now() / spinnerFrameMs) % spinnerFrames.length;
+  return spinnerFrames[index];
+};
 
-  constructor() {
-    super();
-    // Start rendering immediately when instantiated
-    this.startRendering();
+const getStatusIcon = (status: ScriptStatus['kind']) => {
+  switch (status) {
+    case 'cancelled':
+      return '-';
+    case 'pending':
+      return '○';
+    case 'ongoing':
+      return getSpinnerFrame();
+    case 'success':
+      return '✔';
+    case 'failure':
+      return '❌';
+  }
+};
+
+const getStatusColor = (status: ScriptStatus['kind']): ChalkInstance => {
+  switch (status) {
+    case 'cancelled':
+      return chalk.grey;
+    case 'pending':
+      return chalk.grey;
+    case 'ongoing':
+      return chalk.white;
+    case 'success':
+      return chalk.green;
+    case 'failure':
+      return chalk.red;
+  }
+};
+
+const terminalWidth = process.stdout.columns || 80;
+
+const getLogPrefix = (level: Log['kind']): string =>
+  ({
+    error: chalk.bold.red('ERROR  '),
+    warn: chalk.bold.yellow('WARN   '),
+    info: chalk.bold.blue('INFO   '),
+    debug: chalk.bold.white('DEBUG  '),
+    log: chalk.bold.green('LOG    '),
+  })[level];
+
+const formatFlows = (flows: FlowLog[]): string => {
+  let buffer = '';
+  for (const index in flows) {
+    if (Number(index) !== 0) {
+      buffer += '\n';
+    }
+    const flow = flows[index];
+    buffer += chalk.blue.bold(`${flow.name}\n`);
+
+    for (const script of flow.scripts) {
+      const scriptStatusIcon = getStatusIcon(script.status.kind);
+      const c = getStatusColor(script.status.kind);
+      buffer += c(`  ${scriptStatusIcon} ${script.name}\n`);
+      if (script.status.kind === 'ongoing' && script.status.last?.length) {
+        buffer += chalk.grey(`    › ${script.status.last}\n`);
+      }
+
+      const printInBox = (
+        marginLeft: number,
+        border: ChalkInstance,
+        logFilter?: (log: Log) => boolean,
+      ) => {
+        let logBuffer = '';
+        logBuffer += border('├' + '─'.repeat(terminalWidth - 4) + '┐\n');
+        const pushLine = (log: Log) => {
+          logBuffer +=
+            border('│') +
+            getLogPrefix(log.kind) +
+            log.content.padEnd(terminalWidth - 12) +
+            border(' │\n');
+        };
+
+        script.logs.filter(logFilter ?? (() => true)).forEach(pushLine);
+
+        if (script.status.kind === 'failure') {
+          pushLine({ kind: 'error', content: script.status.error });
+        }
+
+        logBuffer += border('└' + '─'.repeat(terminalWidth - 4) + '┘\n');
+        const splittedBuffer = logBuffer.split('\n');
+
+        if (splittedBuffer.length <= 2) {
+          buffer += chalk.grey('  no log');
+        } else {
+          buffer += splittedBuffer.map((x) => ' '.repeat(marginLeft) + x).join('\n');
+        }
+      };
+
+      if (script.status.kind === 'failure') {
+        printInBox(2, chalk.red);
+      } else if (script.logs.find((l) => l.kind === 'warn')) {
+        printInBox(2, chalk.yellow, (log) => ['debug', 'warn'].includes(log.kind));
+      } else if (script.logs.find((l) => l.kind === 'debug')) {
+        printInBox(2, chalk.grey, (log) => ['debug', 'warn'].includes(log.kind));
+      }
+    }
   }
 
-  /**
-   * Initialize a new flow
-   */
-  public initFlow(name: string, jobNames: string[]): string {
-    const flowId = `flow-${Date.now()}-${Math.floor(Math.random() * 1000)}`;
+  return buffer;
+};
 
-    const jobs: Job[] = jobNames.map((jobName, index) => ({
-      id: `job-${flowId}-${index}`,
-      name: jobName,
-      status: index === 0 ? JobStatus.RUNNING : JobStatus.PENDING,
-      logs: [],
-    }));
+type FlowLoggerContext = {
+  registerFlow(flow: FlowLog): void;
+  redraw(): void;
+};
 
-    const flow: Flow = {
-      id: flowId,
-      name,
-      jobs,
-      currentJobIndex: 0,
-      displayStartLine: this.totalDisplayLines,
+const ansiRegex = createAnsiRegex();
+
+const createScriptLogger =
+  (ctx: FlowLoggerContext) =>
+  <N extends string = string>(script: ScriptLog<N>) => {
+    const wrapper = (kind: Log['kind']) => (toprint: any) => {
+      let content = '';
+      if (typeof toprint !== 'string') {
+        try {
+          content = JSON.stringify(toprint, null, '');
+        } catch (_) {
+          content = String(toprint);
+        }
+      } else {
+        content = toprint;
+      }
+
+      script.logs.push({ kind, content: content.replace(ansiRegex, '') });
+      if (script.status.kind === 'ongoing') {
+        script.status.last = content;
+        ctx.redraw();
+      }
     };
 
-    // Calculate lines this flow will take
-    flow.displayLines = 2 + flow.jobs.length; // Header + blank line + one line per job
-    this.totalDisplayLines += flow.displayLines;
+    const updateStatus = (status: ScriptStatus) => {
+      script.status = status;
+      ctx.redraw();
+    };
 
-    // Store the new flow
-    this.flows.set(flowId, flow);
-
-    // Render the flow
-    if (this.isFirstRender) {
-      this.renderFlowsInitial();
-      this.isFirstRender = false;
-    } else {
-      this.renderFlows();
-    }
-
-    return flowId;
-  }
-
-  /**
-   * First time rendering of all flows (without clearing lines)
-   */
-  private renderFlowsInitial(): void {
-    console.clear();
-    // Sort flows by their display order
-    const sortedFlows = Array.from(this.flows.values()).sort(
-      (a, b) => (a.displayStartLine || 0) - (b.displayStartLine || 0),
-    );
-
-    for (const flow of sortedFlows) {
-      // Flow header
-      console.log(chalk.bold.cyan(`\n${flow.name}`));
-
-      // Render all jobs
-      flow.jobs.forEach((job, index) => {
-        const statusIcon = this.getJobStatusIcon(job.status);
-        console.log(`${statusIcon} ${job.name}`);
-
-        // Show logs only for the current running job
-        if (index === flow.currentJobIndex && job.status === JobStatus.RUNNING) {
-          if (job.logs.length > 0) {
-            console.log(chalk.gray('  ' + job.logs[job.logs.length - 1]));
-            flow.displayLines = (flow.displayLines || 0) + 1;
-            this.totalDisplayLines++;
-          }
-        }
-      });
-    }
-  }
-
-  /**
-   * Get icon for job status
-   */
-  private getJobStatusIcon(status: JobStatus): string {
-    switch (status) {
-      case JobStatus.COMPLETED:
-        return chalk.green('✓');
-      case JobStatus.FAILED:
-        return chalk.red('✗');
-      case JobStatus.RUNNING:
-        return chalk.yellow(this.spinnerFrames[this.spinnerIndex]);
-      case JobStatus.PENDING:
-        return chalk.gray('○');
-      default:
-        return '';
-    }
-  }
-
-  /**
-   * Add a log to a specific flow's current running job
-   */
-  public log(flowId: string, message: string): void {
-    const flow = this.flows.get(flowId);
-    if (!flow) return;
-
-    const currentJob = flow.jobs[flow.currentJobIndex];
-    if (currentJob) {
-      currentJob.logs.push(message);
-
-      // Add an extra line if this is the first log
-      if (currentJob.logs.length === 1) {
-        flow.displayLines = (flow.displayLines || 0) + 1;
-        this.totalDisplayLines++;
-
-        // Update display start lines for all flows after this one
-        this.updateFlowDisplayPositions();
-      }
-    }
-  }
-
-  /**
-   * Mark the current job as completed and move to the next one
-   */
-  public completeCurrentJob(flowId: string): void {
-    const flow = this.flows.get(flowId);
-    if (!flow) return;
-
-    const currentJob = flow.jobs[flow.currentJobIndex];
-    if (currentJob) {
-      // Check if this job had logs (we need to account for display line changes)
-      const hadLogs = currentJob.logs.length > 0;
-
-      currentJob.status = JobStatus.COMPLETED;
-      currentJob.logs = []; // Clear logs when job completes
-
-      // Move to the next job if available
-      if (flow.currentJobIndex < flow.jobs.length - 1) {
-        flow.currentJobIndex++;
-        flow.jobs[flow.currentJobIndex].status = JobStatus.RUNNING;
-      } else {
-        // All jobs completed
-        this.emit('flowCompleted', flow.id);
-      }
-
-      // Update display lines if needed
-      if (hadLogs) {
-        flow.displayLines = (flow.displayLines || 0) - 1;
-        this.totalDisplayLines--;
-        this.updateFlowDisplayPositions();
-      }
-    }
-  }
-
-  /**
-   * Mark the current job as failed
-   */
-  public failCurrentJob(flowId: string, errorMessage?: string): void {
-    const flow = this.flows.get(flowId);
-    if (!flow) return;
-
-    const currentJob = flow.jobs[flow.currentJobIndex];
-    if (currentJob) {
-      currentJob.status = JobStatus.FAILED;
-      if (errorMessage) {
-        currentJob.logs.push(chalk.red(`Error: ${errorMessage}`));
-
-        // If this is the first log, account for the extra line
-        if (currentJob.logs.length === 1) {
-          flow.displayLines = (flow.displayLines || 0) + 1;
-          this.totalDisplayLines++;
-          this.updateFlowDisplayPositions();
-        }
-      }
-
-      this.emit('flowFailed', flow.id, currentJob.id);
-    }
-  }
-
-  /**
-   * Remove a flow from tracking
-   */
-  public removeFlow(flowId: string): void {
-    const flow = this.flows.get(flowId);
-    if (!flow) return;
-
-    // Account for the lines this flow was taking up
-    this.totalDisplayLines -= flow.displayLines || 0;
-
-    // Remove the flow
-    this.flows.delete(flowId);
-
-    // Update positions of other flows
-    this.updateFlowDisplayPositions();
-
-    // If no more flows, stop rendering
-    if (this.flows.size === 0) {
-      this.stopRendering();
-    }
-  }
-
-  /**
-   * Update display positions for all flows after layout changes
-   */
-  private updateFlowDisplayPositions(): void {
-    let currentLine = 0;
-
-    // Sort flows by their current display position
-    const sortedFlows = Array.from(this.flows.entries()).sort(
-      ([_, a], [__, b]) => (a.displayStartLine || 0) - (b.displayStartLine || 0),
-    );
-
-    // Reassign positions
-    for (const [flowId, flow] of sortedFlows) {
-      flow.displayStartLine = currentLine;
-      currentLine += flow.displayLines || 0;
-    }
-  }
-
-  /**
-   * Start the flow rendering loop
-   */
-  private startRendering(): void {
-    if (this.intervalId) return; // Already rendering
-
-    this.intervalId = setInterval(() => {
-      this.spinnerIndex = (this.spinnerIndex + 1) % this.spinnerFrames.length;
-      if (this.flows.size > 0) {
-        this.renderFlows();
-      }
-    }, 80);
-  }
-
-  /**
-   * Render all flows to the console
-   */
-  private renderFlows(): void {
-    if (this.flows.size === 0) return;
-
-    // Move cursor to the beginning of the display area
-    readline.moveCursor(process.stdout, 0, -this.totalDisplayLines);
-
-    // Sort flows by their display order
-    const sortedFlows = Array.from(this.flows.values()).sort(
-      (a, b) => (a.displayStartLine || 0) - (b.displayStartLine || 0),
-    );
-
-    // Render each flow
-    for (const index in sortedFlows) {
-      const flow = sortedFlows[index];
-
-      // Clear line and render flow header
-      readline.clearLine(process.stdout, 0);
-      readline.cursorTo(process.stdout, 0);
-      console.log('');
-      console.log(chalk.bold.cyan(`${flow.name}              `));
-
-      // Render jobs
-      for (let i = 0; i < flow.jobs.length; i++) {
-        const job = flow.jobs[i];
-        const statusIcon = this.getJobStatusIcon(job.status);
-
-        readline.clearLine(process.stdout, 0);
-        readline.cursorTo(process.stdout, 0);
-        console.log(`${statusIcon} ${job.name}`);
-
-        // Show logs for running job
-        if (i === flow.currentJobIndex && job.status === JobStatus.RUNNING && job.logs.length > 0) {
-          readline.clearLine(process.stdout, 0);
-          readline.cursorTo(process.stdout, 0);
-          console.log(chalk.gray('  ' + job.logs[job.logs.length - 1]));
-        }
-      }
-    }
-  }
-
-  /**
-   * Stop the rendering loop
-   */
-  private stopRendering(): void {
-    if (this.intervalId) {
-      clearInterval(this.intervalId);
-      this.intervalId = null;
-    }
-  }
-}
-
-// Example usage showing concurrent flows
-async function example() {
-  const logger = new FlowLogger();
-
-  // Initialize first flow
-  const flowId1 = logger.initFlow('Flow 1', ['Fetch Data', 'Transform Data', 'Save Results']);
-
-  // Wait a bit before starting the second flow
-  await new Promise((resolve) => setTimeout(resolve, 1000));
-
-  // Initialize second flow (runs concurrently)
-  const flowId2 = logger.initFlow('Flow 2', [
-    'Load Images',
-    'Apply Filters',
-    'Generate Thumbnails',
-  ]);
-
-  // Run both flows concurrently
-  const runFlow1 = async () => {
-    // Job 1
-    logger.log(flowId1, 'Connecting to API...');
-    await new Promise((resolve) => setTimeout(resolve, 800));
-    logger.log(flowId1, 'Downloading data...');
-    await new Promise((resolve) => setTimeout(resolve, 1200));
-    logger.log(flowId1, 'Downloaded 3.2MB of data');
-    await new Promise((resolve) => setTimeout(resolve, 500));
-    logger.completeCurrentJob(flowId1);
-
-    // Job 2
-    logger.log(flowId1, 'Parsing JSON data...');
-    await new Promise((resolve) => setTimeout(resolve, 1000));
-    logger.log(flowId1, 'Applying transformations...');
-    await new Promise((resolve) => setTimeout(resolve, 1500));
-    logger.completeCurrentJob(flowId1);
-
-    // Job 3
-    logger.log(flowId1, 'Connecting to database...');
-    await new Promise((resolve) => setTimeout(resolve, 1200));
-    logger.log(flowId1, 'Writing records...');
-    await new Promise((resolve) => setTimeout(resolve, 1000));
-    logger.completeCurrentJob(flowId1);
-
-    // Clean up when done
-    setTimeout(() => logger.removeFlow(flowId1), 1000);
+    return {
+      log: wrapper('log'),
+      warn: wrapper('warn'),
+      debug: wrapper('debug'),
+      error: wrapper('error'),
+      info: wrapper('info'),
+      updateStatus,
+    };
   };
 
-  const runFlow2 = async () => {
-    // Job 1
-    logger.log(flowId2, 'Loading 12 images...');
-    await new Promise((resolve) => setTimeout(resolve, 1500));
-    logger.log(flowId2, 'Verifying formats...');
-    await new Promise((resolve) => setTimeout(resolve, 800));
-    logger.completeCurrentJob(flowId2);
+export type ScriptLogger = ReturnType<ReturnType<typeof createScriptLogger>>;
 
-    // Job 2
-    logger.log(flowId2, 'Applying blur filter...');
-    await new Promise((resolve) => setTimeout(resolve, 700));
-    logger.log(flowId2, 'Applying color correction...');
-    await new Promise((resolve) => setTimeout(resolve, 1300));
-    logger.completeCurrentJob(flowId2);
+const createFlowLogger =
+  (ctx: FlowLoggerContext) =>
+  <N extends string = string>(flow: FlowLog<N>) => {
+    ctx.registerFlow(flow);
+    const scriptLoggerCreator = createScriptLogger(ctx);
 
-    // Job 3
-    logger.log(flowId2, 'Generating thumbnails...');
-    await new Promise((resolve) => setTimeout(resolve, 1800));
-    logger.log(flowId2, 'Optimizing images...');
-    await new Promise((resolve) => setTimeout(resolve, 1000));
-    logger.completeCurrentJob(flowId2);
+    const script = (name: N) => {
+      const s = flow.scripts.find((script) => script.name === name);
+      if (!s) throw new Error('script not found');
+      const logger = scriptLoggerCreator(s);
+      return logger;
+    };
 
-    // Clean up when done
-    setTimeout(() => logger.removeFlow(flowId2), 1000);
+    return { script };
   };
 
-  // Run both flows
-  await Promise.all([runFlow1(), runFlow2()]);
-}
+export type FlowLogger = ReturnType<ReturnType<typeof createFlowLogger>>;
+export const flowLogFromFlow = (f: Flow<unknown, unknown>): FlowLog => ({
+  name: f.name + ' #' + genRandomAlphaDecimal(8),
+  scripts: f.scripts.map((s) => ({
+    name: s.name,
+    logs: [],
+    status: { kind: 'pending' },
+  })),
+});
 
-// Uncomment to run the example
-//example();
+export const createOrchestratorLogger = () => {
+  const { log, persist } = createLogManager();
+  const flows: FlowLog[] = [];
 
-export { FlowLogger, JobStatus };
+  const registerFlow = (flow: FlowLog) => {
+    flows.push(flow);
+  };
+
+  let pauseRedraw = false;
+  const redraw = () => {
+    if (pauseRedraw) return;
+    const res = formatFlows(flows);
+    log(res);
+  };
+
+  setInterval(() => redraw(), spinnerFrameMs);
+
+  setInterval(() => {
+    // no point in persisting when screen is not full
+    const [left, right] = R.partition(flows, (flow) =>
+      flow.scripts.every(({ status }) => status.kind !== 'ongoing'),
+    );
+    if (left.length === 0) return;
+    pauseRedraw = true;
+    const res = formatFlows(left);
+    log(res);
+    persist();
+    Object.assign(flows, right);
+    flows.splice(0, flows.length, ...right);
+    redraw();
+    pauseRedraw = false;
+  }, 500);
+
+  const flow = createFlowLogger({ registerFlow, redraw });
+
+  return { flow };
+};
+
+export type OrchestratorLogger = ReturnType<typeof createOrchestratorLogger>;

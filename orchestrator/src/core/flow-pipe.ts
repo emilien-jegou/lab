@@ -1,3 +1,4 @@
+import type { FlowLogger } from '~/utils/logger';
 import type { Flow } from './flow';
 import type { Script } from './script';
 import type { Trigger } from './trigger';
@@ -148,17 +149,45 @@ export function flowPipe<A, B, C, D, E, F, G, H, I, J, K, L, M, N, O, P>(
   op15: Script<O, P>,
 ): Flow<A, P>;
 
-export function flowPipe(...operations: Script[]): Flow<unknown, unknown> {
+export function flowPipe(this: { name: string }, ...operations: Script[]): Flow<unknown, unknown> {
   const _triggers: Trigger<unknown>[] = [];
 
   return {
     kind: 'flow',
     name: this.name,
     _triggers,
+    scripts: operations,
     trigger(t: Trigger<unknown>) {
       _triggers.push(t);
       return this;
     },
-    run: (value: unknown) => operations.reduce((acc, v) => v.run(acc), value),
+    run: async (value: unknown, logger: FlowLogger) => {
+      let current = value;
+      let errorEncountered = false;
+      let cancelled = false;
+
+      const cancel = () => (cancelled = true);
+
+      for (const op of operations) {
+        const scriptLogger = logger.script(op.name);
+
+        if (cancelled || errorEncountered) {
+          scriptLogger.updateStatus({ kind: 'cancelled' });
+          continue;
+        }
+        try {
+          scriptLogger.updateStatus({ kind: 'ongoing' });
+          current = await Promise.resolve(op.run(current, { logger: scriptLogger, cancel }));
+          if (cancelled) {
+            scriptLogger.updateStatus({ kind: 'cancelled' });
+            continue;
+          }
+          scriptLogger.updateStatus({ kind: 'success' });
+        } catch (e: unknown) {
+          scriptLogger.updateStatus({ kind: 'failure', error: String(e) });
+          errorEncountered = true;
+        }
+      }
+    },
   };
 }
