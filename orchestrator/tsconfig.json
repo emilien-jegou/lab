@@ -1,22 +1,30 @@
 {
   "compilerOptions": {
-    "module": "nodenext",
-    "allowJs": true,
+    "target": "ES2022",
+    "module": "ESNext",
+    "moduleResolution": "node",
+    "lib": ["DOM", "ES2020"],
     "strict": true,
-    "resolveJsonModule": true,
+    "jsx": "react-jsx",
+    "allowJs": true,
+    "allowSyntheticDefaultImports": true,
+    "checkJs": true,
     "esModuleInterop": true,
-    "skipLibCheck": true,
     "forceConsistentCasingInFileNames": true,
     "isolatedModules": true,
+    "noEmit": true,
     "noImplicitReturns": true,
-    "checkJs": true,
     "noUnusedLocals": false,
+    "resolveJsonModule": true,
+    "skipLibCheck": true,
     "useDefineForClassFields": true,
+    "types": ["bun-types"],
     "noFallthroughCasesInSwitch": true,
     "noUnusedParameters": false,
     "paths": {
       "~/*": ["./src/*"]
     }
   },
-  "include": ["src"]
+  "include": ["src", "test.ts"],
+  "type": "module"
 }

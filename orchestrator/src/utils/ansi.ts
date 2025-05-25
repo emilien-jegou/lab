@@ -8,4 +8,4 @@ export const createAnsiRegex = ({ onlyFirst = false } = {}) => {
   ].join('|');
 
   return new RegExp(pattern, onlyFirst ? undefined : 'g');
-}
+};

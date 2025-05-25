@@ -15,7 +15,6 @@ export function addRoute(
 ) {
   const l: keyof typeof server = method.toLowerCase() as any;
   (server[l] as any)(path, async (req: FastifyRequest, res: FastifyReply) => {
-
     await handler(req, res);
   });
 }
