@@ -8,6 +8,8 @@ import { genRandomAlphaDecimal } from './random';
 
 type Observer<T> = (value: T) => void;
 
+const disableLogging: boolean = false;
+
 export type Signal<T> = {
   get value(): T;
   set value(value: T);
@@ -134,7 +136,9 @@ const formatFlows = (flows: FlowLog[]): string => {
       const c = getStatusColor(script.status.kind);
       buffer += c(`  ${scriptStatusIcon} ${script.name}\n`);
       if (script.status.kind === 'ongoing' && script.status.last?.length) {
-        buffer += chalk.grey(`    › ${script.status.last}\n`);
+        buffer += chalk.grey(
+          `    › ${script.status.last?.slice(0, 70)}${script.status.last?.length >= 70 ? '...' : ''}\n`,
+        );
       }
 
       const printInBox = (
@@ -263,7 +267,7 @@ export const createOrchestratorLogger = () => {
 
   let pauseRedraw = false;
   const redraw = () => {
-    if (pauseRedraw) return;
+    if (disableLogging || pauseRedraw) return;
     const res = formatFlows(flows);
     log(res);
   };
@@ -275,7 +279,7 @@ export const createOrchestratorLogger = () => {
     const [left, right] = R.partition(flows, (flow) =>
       flow.scripts.every(({ status }) => status.kind !== 'ongoing'),
     );
-    if (left.length === 0) return;
+    if (disableLogging || left.length === 0) return;
     pauseRedraw = true;
     const res = formatFlows(left);
     log(res);
@@ -284,7 +288,7 @@ export const createOrchestratorLogger = () => {
     flows.splice(0, flows.length, ...right);
     redraw();
     pauseRedraw = false;
-  }, 500);
+  }, 2500);
 
   const flow = createFlowLogger({ registerFlow, redraw });
 

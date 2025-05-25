@@ -2,7 +2,6 @@ import { readdirSync } from 'fs';
 import { join, extname } from 'path';
 import type { Flow } from './flow';
 
-// Note: On Windows, pathname starts with a leading slash; may need to strip it
 const directory = join(process.cwd(), './src/flows');
 
 export const loadFlows = async (): Promise<Flow<unknown, unknown>[]> => {

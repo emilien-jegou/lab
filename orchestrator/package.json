@@ -13,10 +13,13 @@
   "dependencies": {
     "chalk": "^5.4.1",
     "fastify": "^5.3.3",
+    "json-schema-to-typescript": "^15.0.4",
     "log-update": "^6.1.0",
+    "neverthrow": "^8.2.0",
     "ollama": "^0.5.15",
     "remeda": "^2.21.8",
-    "zod": "^3.24.4"
+    "zod": "^3.24.4",
+    "zod-to-json-schema": "^3.24.5"
   },
   "devDependencies": {
     "@types/eslint": "^9.6.1",
