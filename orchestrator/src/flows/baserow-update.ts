@@ -19,8 +19,6 @@ const wt = webhookTrigger('/hooks/baserow-update')
 // prettier-ignore
 export default flow('baserow_update')
   .trigger(wt)
-  .for((i) => i.retryCount, (f) =>
-    f.$(brandSearch.store('search'))
-      .$(bestFitBrandUrl)
-      .$(updateBrandOnBaserow)
-  )
+  //.for((i) => i.retryCount, (f) =>
+  .$(brandSearch.store('search')).$(bestFitBrandUrl).$(updateBrandOnBaserow);
+//)
