@@ -1,39 +1,62 @@
-import type { FlowLogger } from '~/utils/logger';
+import type { DictSet } from '~/utils/dict';
+import type { FlowTracer } from '~/utils/logger';
 import type { Script, ScriptContext } from './script';
 import type { Trigger } from './trigger';
 
-export interface Flow<In, Out, Store extends object = object> {
+export type Prettify<T> = { [K in keyof T]: T[K] } & {};
+type UpdateStoreExtension<Ext extends Record<string, any>, StoreKey, Out> = Prettify<
+  DictSet<
+    Ext,
+    'store',
+    StoreKey extends string ? DictSet<Ext['store'], StoreKey, Out> : Ext['store']
+  >
+>;
+
+export interface Flow<
+  In = unknown,
+  Out = unknown,
+  Ext extends Record<string, unknown> = Record<string, unknown>,
+> {
   kind: 'flow';
   name: string;
   triggers: Trigger<In>[];
-  scripts: Script[];
-  $: <Next, StoreKey>(
-    s: Script<Out, Next, Store, In, StoreKey>,
-  ) => Flow<In, Next, StoreKey extends string ? Store & Record<StoreKey, Next> : Store>;
-  run(input: In, logger: FlowLogger): Promise<Out>;
-  for<T>(arr: (input: ScriptContext<In, Store, In>) => T[], loopCb: (s: any) => any): this;
+  tree: (Script | Flow<any, any, any>)[];
+  //function $<T extends R>(ext: T): Script<Out, Next, R, StoreKey>;
+  //function $<T>(ext: T): 'Error: Extensions not fulfilled';
+  //function $(ext: any);
+  $: <Next, StoreKey, R extends Record<never, never>>(
+    // TODO: clearer message here
+    s: Ext extends R
+      ? Script<Out, Next, R, StoreKey>
+      : [`Extension does not satisfy requirement`, Ext],
+  ) => Flow<In, Next, UpdateStoreExtension<Ext, StoreKey, Next>>;
+
+  run(input: In, logger: FlowTracer): Promise<Out>;
+  for<T>(
+    arr: (input: ScriptContext<In, Ext>) => T[],
+    loopCb: (s: Flow<T, Out, Prettify<DictSet<Ext, 'iter', T>>>) => any,
+  ): this;
 }
 
 export const flow = (name: string) => {
   const triggers: Trigger<any>[] = [];
-  const scripts: Script[] = [];
+  const scripts: (Script | Flow<any, any, any>)[] = [];
   const store: Record<string, any> = {};
 
   return {
-    trigger: <In extends object>(trigger: Trigger<In>): Flow<In, In> => {
+    trigger: <In extends object>(trigger: Trigger<In>): Flow<In, In, { trigger: In }> => {
       triggers.push(trigger);
-
-      const flowChain: Flow<In, In> = {
+      const flowChain: Flow<In, In, { trigger: In }> = {
         name,
         kind: 'flow',
         triggers,
-        scripts,
+        tree: scripts,
         $: (<Next>(s: Script<In, Next, any, In>): Flow<In, Next, any> => {
           scripts.push(s as unknown as Script);
-          return flowChain as unknown as Flow<In, Next>;
+          return flowChain as unknown as Flow<In, Next, { trigger: In }>;
         }) as unknown as any,
-        run: createRunner<In>(scripts, store),
-        for<T>(arr: (input: ScriptContext<In, Store, In>) => T[], loopCb: (s: any) => any) {
+        run: createRunner<In>(scripts, { store, iter: undefined }),
+        for<T>(_arr: (input: any) => T[], _loopCb: (s: any) => any) {
           return this;
         },
       };
@@ -44,47 +67,60 @@ export const flow = (name: string) => {
 };
 
 const createRunner =
-  <In extends object>(scripts: Script[], store: Record<string, any>) =>
-  async (value: In, logger: FlowLogger) => {
+  <In extends object>(tasks: (Script | Flow)[], ctx: Record<string, any>) =>
+  async (value: In, tracer: FlowTracer) => {
     let current: any = value;
     let errorEncountered = false;
     let cancelled = false;
 
     const cancel = () => (cancelled = true);
 
-    for (const currentScript of scripts) {
-      const scriptLogger = logger.script(currentScript.name);
+    for (const currentTask of tasks) {
+      switch (currentTask.kind) {
+        case 'script': {
+          const scriptTracer = tracer.script(currentTask.name);
+          const scriptLogger = scriptTracer.logger();
 
-      if (cancelled || errorEncountered) {
-        scriptLogger.updateStatus({ kind: 'cancelled' });
-        continue;
-      }
+          if (cancelled || errorEncountered) {
+            scriptTracer.updateStatus({ kind: 'cancelled' });
+            continue;
+          }
 
-      try {
-        scriptLogger.updateStatus({ kind: 'ongoing' });
-        current = await Promise.resolve(
-          currentScript.run({
-            prev: current,
-            trigger: value,
-            store: { ...store },
-            logger: scriptLogger,
-            cancel,
-          }),
-        );
+          try {
+            scriptTracer.updateStatus({ kind: 'ongoing' });
+            current = await Promise.resolve(
+              currentTask.run(
+                {
+                  ...ctx,
+                  prev: current,
+                  trigger: value,
+                } as any,
+                {
+                  logger: scriptLogger,
+                  cancel,
+                },
+              ),
+            );
 
-        if (cancelled) {
-          scriptLogger.updateStatus({ kind: 'cancelled' });
-          continue;
+            if (cancelled) {
+              scriptTracer.updateStatus({ kind: 'cancelled' });
+              continue;
+            }
+
+            if (currentTask._store !== undefined) {
+              ctx['store'][currentTask._store] = current;
+            }
+
+            scriptTracer.updateStatus({ kind: 'success', data: JSON.stringify(current) });
+          } catch (e: unknown) {
+            scriptTracer.updateStatus({ kind: 'failure', error: String(e) });
+            errorEncountered = true;
+          }
+          break;
         }
-
-        if (currentScript._store !== undefined) {
-          store[currentScript._store] = current;
+        case 'flow': {
+          break;
         }
-
-        scriptLogger.updateStatus({ kind: 'success' });
-      } catch (e: unknown) {
-        scriptLogger.updateStatus({ kind: 'failure', error: String(e) });
-        errorEncountered = true;
       }
     }
 

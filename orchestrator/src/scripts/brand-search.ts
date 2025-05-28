@@ -1,15 +1,12 @@
-import { z } from 'zod';
 import { searchSearxng } from '~/helpers/query-searxng';
 import { script } from '../core/script';
 
-export const item = z.object({
-  id: z.number(),
-  name: z.string(),
-  order: z.number(),
-  table_id: z.string(),
-});
-
-type Item = z.infer<typeof item>;
+type Item = {
+  id: number;
+  name: string;
+  order: number;
+  table_id: string;
+};
 
 type Search = {
   url: string;
@@ -18,15 +15,15 @@ type Search = {
   score: number;
 };
 
-export const brandSearch = script<Item, { searches: Search[]; item: Item }>(
+export const brandSearch = script<any, { searches: Search[] }, { iter: Item }>(
   'web search for brand url',
-  async ({ prev, cancel }) => {
-    if (prev.name.trim().length < 3) throw new Error('too short');
-    const searchResult = (await searchSearxng(`${prev.name}, clothing !sp`)).results;
+  async ({ iter }, methods) => {
+    if (iter.name.trim().length < 3) throw new Error('too short');
+    const searchResult = (await searchSearxng(`${iter.name}, clothing !sp`)).results;
 
     if (searchResult.length <= 4) {
-      console.log(`while searching: ${prev.name}`);
-      cancel();
+      console.log(`while searching: ${iter.name}`);
+      methods.cancel();
       return {} as any;
     }
 
@@ -39,6 +36,6 @@ export const brandSearch = script<Item, { searches: Search[]; item: Item }>(
       };
     });
 
-    return { searches, item };
+    return { searches };
   },
 );

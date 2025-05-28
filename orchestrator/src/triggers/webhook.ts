@@ -1,10 +1,10 @@
 import type { FastifyReply, FastifyRequest } from 'fastify';
 import type { ZodSchema } from 'zod';
 import { z, ZodError } from 'zod';
+import { createFlowTracer, flowTraceFromFlow, type AppTracer } from '~/utils/logger';
 import { addRoute } from '~/utils/server';
 import type { Flow } from '../core/flow';
 import type { Trigger } from '../core/trigger';
-import { flowLogFromFlow, type OrchestratorLogger } from '../utils/logger';
 
 // Define the types with Zod schema inference
 type InferType<S extends ZodSchema> = z.infer<S>;
@@ -28,13 +28,15 @@ type WebhookTriggerOptions = {
 
 const createRegister =
   <S extends ZodSchema>(path: string, method: WebhookMethod, schema: S) =>
-  async <Out>(flow: Flow<InferType<S>, Out>, logger: OrchestratorLogger) => {
+  async <Out>(flow: Flow<InferType<S>, Out>, tracer: AppTracer) => {
     addRoute(method, path, async (request: FastifyRequest, reply: FastifyReply) => {
-      const flowLog = flowLogFromFlow(flow);
+      const flowTracer = createFlowTracer(flow);
+
+      tracer.addFlowTracer(flowTracer);
+
       try {
         const result = schema.parse(request.body) as InferType<S>;
-        const flowLogger = logger.flow(flowLog);
-        flow.run(result, flowLogger);
+        flow.run(result, flowTracer);
       } catch (err) {
         if (err instanceof ZodError) {
           reply.status(400).send({

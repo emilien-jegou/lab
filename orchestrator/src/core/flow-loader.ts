@@ -4,7 +4,7 @@ import type { Flow } from './flow';
 
 const directory = join(process.cwd(), './src/flows');
 
-export const loadFlows = async (): Promise<Flow<unknown, unknown>[]> => {
+export const loadFlows = async (): Promise<Flow<unknown, unknown, Record<string, never>>[]> => {
   // Read all .ts files and dynamically import them
   const modules = readdirSync(directory)
     .filter((f) => extname(f) === '.ts')

@@ -1,32 +1,35 @@
 import type { ScriptLogger } from '~/utils/logger';
 import { createTaskObservable, type TaskMessage } from './worker';
 
-export type ScriptContext<In, Store, Trigger> = {
+export type ScriptContext<In, Ext> = {
   prev: In;
-  store: Store;
-  trigger: Trigger;
+} & Ext;
+
+type ScriptMethods = {
   cancel: (reason?: string) => void;
 };
 
-type ScriptFn<In, Out, Store, Trigger> = (
-  ctx: ScriptContext<In, Store, Trigger>,
+type ScriptFn<In, Out, Ext> = (
+  ctx: ScriptContext<In, Ext>,
+  methods: ScriptMethods,
 ) => Promise<Out> | Out;
 
-type OutterContext<In, Store, Trigger> = ScriptContext<In, Store, Trigger> & {
+type OutterContext = {
   logger: ScriptLogger;
+  cancel: (reason?: string) => void;
 };
 
 export interface Script<
   In = unknown,
   Out = unknown,
-  Store = Record<never, never>,
-  Trigger = Record<never, never>,
+  Ext extends Record<string, any> = object,
   StoreKey = undefined,
 > {
+  kind: 'script';
   _store?: StoreKey;
   name: string;
-  store<const S extends string>(storeName: S): Script<In, Out, Store, Trigger, S>;
-  run(outerContext: OutterContext<In, Store, Trigger>): Promise<Out>;
+  store<const S extends string>(storeName: S): Script<In, Out, Ext, S>;
+  run(outerContext: ScriptContext<In, Ext>, other: OutterContext): Promise<Out>;
 
   // .cache('brandSearch', { ttl: '1h' })
   // .validate((i) => i.webSearch.searches.length > 0)
@@ -134,19 +137,21 @@ const overwriteConsole = (interceptor: (s: TaskMessage<any, any>) => void) => {
   };
 };
 
-export const script = <In, Out, Store = Record<never, never>, Trigger = object>(
+export const script = <
+  In,
+  Out extends Record<string, unknown>,
+  Ext extends Record<string, unknown> = Record<never, never>,
+>(
   name: string,
-  handler: ScriptFn<In, Out, Store, Trigger>,
-): Script<In, Out, Store, Trigger> => {
+  handler: ScriptFn<In, Out, Ext>,
+): Script<In, Out, Ext> => {
   const loc = getCalleeLocation(new Error().stack!);
-  self.onmessage = (event: MessageEvent<{ prev: In; store: Store; trigger: Trigger }>) => {
+  self.onmessage = (event: MessageEvent<ScriptContext<In, Ext>>) => {
     if ((event as any).data === 'ping') {
       return void self.postMessage('pong');
     }
 
-    overwriteConsole((m) => {
-      self.postMessage(m);
-    });
+    overwriteConsole((m) => self.postMessage(m));
 
     let isCancelled = false;
     const cancel = (reason?: string) => {
@@ -154,17 +159,10 @@ export const script = <In, Out, Store = Record<never, never>, Trigger = object>(
       self.postMessage({ kind: 'cancelled', reason, completedat: Date.now() });
     };
 
-    Promise.resolve(
-      handler({
-        prev: event.data.prev,
-        store: event.data.store,
-        trigger: event.data.trigger,
-        cancel,
-      }),
-    )
+    Promise.resolve(handler(event.data, { cancel }))
       .then((result) => {
         if (isCancelled) return;
-        const response: TaskMessage<In, Store> = {
+        const response: TaskMessage<In, Ext> = {
           result: JSON.stringify(result),
           kind: 'success',
           completedAt: Date.now(),
@@ -178,7 +176,8 @@ export const script = <In, Out, Store = Record<never, never>, Trigger = object>(
         }
       })
       .catch((err: any) => {
-        const errorResponse: TaskMessage<In, Store> = {
+        console.info('received error', err);
+        const errorResponse: TaskMessage<In, Ext> = {
           kind: 'failure',
           error: JSON.stringify(err + '\n' + err.stack),
           completedAt: Date.now(),
@@ -193,9 +192,10 @@ export const script = <In, Out, Store = Record<never, never>, Trigger = object>(
       });
   };
 
-  const taskObservable = createTaskObservable<In, Store, Trigger>(loc);
+  const taskObservable = createTaskObservable<In, Ext>(loc);
 
   return {
+    kind: 'script',
     name,
     _store: undefined,
     // see definition above
@@ -204,36 +204,37 @@ export const script = <In, Out, Store = Record<never, never>, Trigger = object>(
       return this as any;
     },
 
-    run: (ctx: OutterContext<In, Store, Trigger>) =>
-      new Promise((res, rej) => {
+    run: (scriptContext: ScriptContext<any, any>, outter: OutterContext) => {
+      const p: any = new Promise((res, rej) => {
         const subscriber = taskObservable.subscribe({
-          next: (data: TaskMessage<In, Store>) => {
+          next: (data: TaskMessage<In, Ext>) => {
             switch (data.kind) {
-              case 'ready':
-                data.send({ prev: ctx.prev, store: ctx.store });
+              case 'ready': {
+                data.send(scriptContext);
                 return;
+              }
               case 'console':
-                ctx.logger[data.logType](data.message);
+                outter.logger[data.logType](data.message);
                 return;
               case 'success': {
-                ctx.logger.log(`Task finished at ${data.completedAt}`);
+                outter.logger.log(`Task finished at ${data.completedAt}`);
                 const parsed = JSON.parse(data.result);
                 res(parsed);
                 subscriber.unsubscribe();
                 return;
               }
               case 'cancelled': {
-                ctx.logger.log(`Task cancelled at ${data.completedAt}`);
+                outter.logger.log(`Task cancelled at ${data.completedAt}`);
                 if (data.reason) {
-                  ctx.logger.log(`Cancel reason: ${data.reason}`);
+                  outter.logger.log(`Cancel reason: ${data.reason}`);
                 }
-                ctx.cancel();
+                outter.cancel();
                 res(undefined as any);
                 subscriber.unsubscribe();
                 return;
               }
               case 'failure': {
-                ctx.logger.log(`Task failed at ${data.completedAt}`);
+                outter.logger.log(`Task failed at ${data.completedAt}`);
 
                 const parsedError = JSON.parse(data.error);
                 rej(parsedError);
@@ -243,11 +244,14 @@ export const script = <In, Out, Store = Record<never, never>, Trigger = object>(
             }
           },
           error: (err) => {
-            ctx.logger.error(err);
+            scriptContext.logger.error(err);
             rej(err);
             subscriber.unsubscribe();
           },
         });
-      }),
+      });
+
+      return p;
+    },
   };
 };

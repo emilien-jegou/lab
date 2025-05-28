@@ -11,11 +11,13 @@ export const item = z.object({
 
 type ItemWithUrl = z.infer<typeof item> & { url: string };
 
-export const updateBrandOnBaserow = script<ItemWithUrl, void, { search: any }>(
-  'update brand url on baserow',
-  async ({ prev }) => {
-    await saveToBaserow(prev.table_id, prev.id, {
-      URL: prev.url,
-    });
-  },
-);
+export const updateBrandOnBaserow = script<
+  ItemWithUrl,
+  Record<never, never>,
+  { store: { search: any } }
+>('update brand url on baserow', async ({ prev }) => {
+  await saveToBaserow(prev.table_id, prev.id, {
+    URL: prev.url,
+  });
+  return {};
+});

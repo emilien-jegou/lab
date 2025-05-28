@@ -6,9 +6,9 @@ export interface TaskInput<T = unknown> {
   data: T;
 }
 
-type SendValues<In, Store, Trigger> = Pick<ScriptContext<In, Store, Trigger>, 'prev' | 'store'>;
-export type TaskMessage<In, Store = Record<never, never>, Trigger = object> =
-  | { kind: 'ready'; send: (input: SendValues<In, Store, Trigger>) => void }
+type SendValues<In, Ext> = Omit<ScriptContext<In, Ext>, 'cancel'>;
+export type TaskMessage<In, Ext> =
+  | { kind: 'ready'; send: (input: SendValues<In, Ext>) => void }
   | { kind: 'console'; logType: 'log' | 'info' | 'debug' | 'error' | 'warn'; message: string }
   | {
       kind: 'success';
@@ -22,18 +22,22 @@ export type TaskMessage<In, Store = Record<never, never>, Trigger = object> =
     }
   | { kind: 'cancelled'; reason: string; completedAt: number };
 
-export const createTaskObservable = <In, Store, Trigger>(
-  path: string,
-): Observable<TaskMessage<In, Store>> =>
+export const createTaskObservable = <In, Ext>(path: string): Observable<TaskMessage<In, Ext>> =>
   new Observable((subscriber) => {
     const worker = new Worker(path);
 
-    worker.onmessage = (event: MessageEvent<'pong' | TaskMessage<In, Store, Trigger>>) => {
+    worker.onmessage = (event: MessageEvent<'pong' | TaskMessage<In, Ext>>) => {
       if (event.data === 'pong') {
         subscriber.next({
           kind: 'ready',
-          send: (input: SendValues<In, Store, Trigger>) => {
-            worker.postMessage(input);
+          send: (input: SendValues<In, Ext>) => {
+            try {
+              const message = JSON.parse(JSON.stringify(input));
+              worker.postMessage(message);
+            } catch (err) {
+              console.error('Error during message parsing');
+              throw err;
+            }
           },
         });
       } else {
