@@ -1,4 +1,5 @@
 import type { Flow } from '~/core/flow';
+import { Trigger } from '~/core/trigger';
 import { createAnsiRegex } from './ansi';
 import { genRandomAlphaDecimal } from './random';
 
@@ -90,8 +91,8 @@ const createScriptTracer = <N extends string = string>(script: ScriptTrace<N>) =
 
 export type ScriptTracer = ReturnType<typeof createScriptTracer>;
 
-export const createFlowTracer = <N extends string = string>(flow: Flow) => {
-  const flowTrace = flowTraceFromFlow(flow);
+export const createFlowTracer = <N extends string = string>(flow: Flow, trigger: TriggerTrace) => {
+  const flowTrace = flowTraceFromFlow(flow, trigger);
 
   const script = (name: N) => {
     const task = flowTrace.tasks.find(
@@ -126,9 +127,9 @@ export const createFlowTracer = <N extends string = string>(flow: Flow) => {
 
 export type FlowTracer = ReturnType<typeof createFlowTracer>;
 
-export const flowTraceFromFlow = (f: Flow, triggeredBy: TriggerTrace): FlowTrace => ({
+export const flowTraceFromFlow = (f: Flow, trigger: TriggerTrace): FlowTrace => ({
   name: f.name + ' #' + genRandomAlphaDecimal(8),
-  triggeredBy,
+  triggeredBy: trigger,
   tasks: f.tree.map((s) => ({
     kind: 'script' as const,
     data: {

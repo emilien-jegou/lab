@@ -1,4 +1,4 @@
-import type { ScriptLogger } from '~/utils/logger';
+import type { Logger } from '~/utils/tracer';
 import { createTaskObservable, type TaskMessage } from './worker';
 
 export type ScriptContext<In, Ext> = {
@@ -15,7 +15,7 @@ type ScriptFn<In, Out, Ext> = (
 ) => Promise<Out> | Out;
 
 type OutterContext = {
-  logger: ScriptLogger;
+  logger: Logger;
   cancel: (reason?: string) => void;
 };
 

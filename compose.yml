@@ -94,6 +94,8 @@ services:
       start_period: 20s
       test: ["CMD-SHELL", "redis-cli ping | grep PONG"]
       timeout: 3s
+    ports:
+      - 6379:6379
     restart: unless-stopped
     volumes:
       - redis:/data

@@ -1,5 +1,5 @@
 import type { z } from 'zod';
-import type { AppTracer } from '../utils/logger';
+import type { AppTracer } from '../utils/tracer';
 import type { Flow } from './flow';
 
 export type ZodSchema = z.ZodType<any, any, any>;
