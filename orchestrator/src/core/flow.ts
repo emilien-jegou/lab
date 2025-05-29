@@ -1,5 +1,5 @@
 import type { DictSet } from '~/utils/dict';
-import type { FlowTracer } from '~/utils/logger';
+import type { FlowTracer } from '~/utils/tracer';
 import type { Script, ScriptContext } from './script';
 import type { Trigger } from './trigger';
 
@@ -78,7 +78,7 @@ const createRunner =
     for (const currentTask of tasks) {
       switch (currentTask.kind) {
         case 'script': {
-          const scriptTracer = tracer.script(currentTask.name);
+          const scriptTracer = await tracer.script(currentTask.name);
           const scriptLogger = scriptTracer.logger();
 
           if (cancelled || errorEncountered) {

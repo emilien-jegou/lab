@@ -1,15 +1,14 @@
-import { createOrchestratorLogger } from '../utils/logger';
+import { RedisClient } from 'bun';
 import { serve } from '../utils/server';
 import { loadFlows } from './flow-loader';
 import './worker';
 
 export const launch = async () => {
   const flows = await loadFlows();
-  const logger = createOrchestratorLogger();
 
   for (const flow of flows) {
     for (const trigger of flow.triggers) {
-      trigger.register(flow, logger);
+      trigger.register(flow, new RedisClient());
     }
   }
 

@@ -1,8 +1,9 @@
+import type { RedisClient } from 'bun';
 import type { FastifyReply, FastifyRequest } from 'fastify';
 import type { ZodSchema } from 'zod';
 import { z, ZodError } from 'zod';
-import { createFlowTracer, flowTraceFromFlow, type AppTracer } from '~/utils/logger';
 import { addRoute } from '~/utils/server';
+import { createFlowTracer } from '~/utils/tracer';
 import type { Flow } from '../core/flow';
 import type { Trigger } from '../core/trigger';
 
@@ -28,14 +29,15 @@ type WebhookTriggerOptions = {
 
 const createRegister =
   <S extends ZodSchema>(path: string, method: WebhookMethod, schema: S) =>
-  async <Out>(flow: Flow<InferType<S>, Out>, tracer: AppTracer) => {
+  async <Out>(flow: Flow<InferType<S>, Out>, client: RedisClient) => {
     addRoute(method, path, async (request: FastifyRequest, reply: FastifyReply) => {
-      const flowTracer = createFlowTracer(flow);
-
-      tracer.addFlowTracer(flowTracer);
-
       try {
         const result = schema.parse(request.body) as InferType<S>;
+        const flowTracer = await createFlowTracer(client, flow, {
+          kind: 'webhook',
+          data: JSON.stringify(result),
+        });
+
         flow.run(result, flowTracer);
       } catch (err) {
         if (err instanceof ZodError) {

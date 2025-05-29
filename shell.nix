@@ -9,6 +9,7 @@ pkgs.mkShell {
     pkgs.git
 
     # Orchestrator
+    pkgs.redisinsight
     pkgs.bun
     pkgs.yarn
     pkgs.nodePackages.typescript-language-server

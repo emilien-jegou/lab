@@ -32,10 +32,12 @@ const wt = webhookTrigger('/hooks/baserow-update').schema(z.any()).build();
 
 export default flow('baserow_update')
   .trigger(wt)
-  .for((_) => Array.from({ length: 10 }, (_, idx) => idx), (iter) =>
-    iter.$(printContext)
-      .$(printContext)
-  )
+  .$(printContext)
+//.for((_) => Array.from({ length: 10 }, (_, idx) => idx), (iter) =>
+//  iter.$(printContext)
+//    .$(printContext)
+//)
+
 //export default flow('baserow_update')
 //  .trigger(wt)
 //  .for((i) => i.prev.items, (iter) => {

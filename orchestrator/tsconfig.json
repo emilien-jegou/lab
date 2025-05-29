@@ -1,23 +1,31 @@
 {
   "compilerOptions": {
-    "module": "nodenext",
+    "target": "ES2022",
+    "module": "ESNext",
+    "moduleResolution": "bundler",
     "lib": ["DOM", "ES2020"],
-    "allowJs": true,
     "strict": true,
-    "resolveJsonModule": true,
+    "jsx": "react-jsx",
+    "allowJs": true,
+    "allowImportingTsExtensions": true,
+    "allowSyntheticDefaultImports": true,
+    "checkJs": true,
     "esModuleInterop": true,
-    "skipLibCheck": true,
     "forceConsistentCasingInFileNames": true,
     "isolatedModules": true,
+    "noEmit": true,
     "noImplicitReturns": true,
-    "checkJs": true,
     "noUnusedLocals": false,
+    "resolveJsonModule": true,
+    "skipLibCheck": true,
     "useDefineForClassFields": true,
+    "types": ["bun-types"],
     "noFallthroughCasesInSwitch": true,
     "noUnusedParameters": false,
     "paths": {
       "~/*": ["./src/*"]
     }
   },
-  "include": ["src"]
+  "include": ["src"],
+  "type": "module"
 }
