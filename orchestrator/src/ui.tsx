@@ -1,19 +1,19 @@
-import { RedisClient } from 'bun';
 import { render } from 'ink';
 import React, { useState, useEffect } from 'react';
+import { useFlows } from './hooks/use-flows';
 import type { FlowEntity } from './utils/tracer';
-import { getFlowStorage } from './utils/tracer';
 
 // Use dynamic imports for problematic packages
 const { Box, Text, useInput, useApp } = await import('ink');
-//const Spinner = (await import('ink-spinner')).default;
+const Table = (await import('ink-table')).default;
+const Spinner = (await import('ink-spinner')).default;
 
 interface TerminalSize {
   width: number;
   height: number;
 }
 
-const useTerminalSize = (): TerminalSize => {
+const _useTerminalSize = (): TerminalSize => {
   const [size, setSize] = useState<TerminalSize>({
     width: process.stdout.columns || 80,
     height: process.stdout.rows || 24,
@@ -34,31 +34,71 @@ const useTerminalSize = (): TerminalSize => {
   return size;
 };
 
+//export type FlowEntity = {
+//  id: string;
+//  name: string;
+//  trigger: TriggerTrace;
+//  tasks: TaskTrace[];
+//  status: ScriptStatus['kind'];
+//};
+type TaskStatus = 'success' | 'ongoing' | 'pending' | 'failure' | 'cancelled' | 'warning';
+
+interface StatusIconProps {
+  status: TaskStatus;
+  showProgress?: boolean;
+  progress?: number;
+}
+
+const StatusIcon: React.FC<StatusIconProps> = ({ status, showProgress, progress }) => {
+  switch (status) {
+    case 'success':
+      return <Text color="green">✅</Text>;
+    case 'ongoing':
+      return (
+        <Box>
+          <Text color="blue">
+            <Spinner type="dots" />
+          </Text>
+          {showProgress && progress !== undefined && <Text color="blue"> {progress}%</Text>}
+        </Box>
+      );
+    case 'pending':
+      return <Text color="light-gray">⏳</Text>;
+    case 'failure':
+      return <Text color="red">❌</Text>;
+    case 'cancelled':
+      return <Text color="gray">⏹️</Text>;
+    case 'warning':
+      return <Text color="yellow">⚠️</Text>;
+    default:
+      return <Text color="gray">⚪</Text>;
+  }
+};
+
+//    <Table
+//      data={Object.entries(flows).map(([_, { id, name, trigger, status }]) => ({
+//        id,
+//        name,
+//        trigger: trigger.kind,
+//        status: status,
+//        startedAt: String(trigger.receivedAt),
+//      }))}
+//    />
+const TaskRow: React.FC<{ flow: FlowEntity }> = ({ flow }) => (
+  <Box flexDirection="row" gap={4}>
+    <Box width={24}>
+      <Text>{flow.id.slice(0, 6)}</Text>
+    </Box>
+    <Box width={12}>
+      <Text>{String(flow.trigger.receivedAt)}</Text>
+    </Box>
+    <StatusIcon status={flow.status} />
+  </Box>
+);
+
 export const App: React.FC = () => {
   const { exit } = useApp();
-  const [keys, setKeys] = useState<Record<string, FlowEntity>>({});
-
-  useEffect(() => {
-    let p: any;
-    (async () => {
-      const client = new RedisClient();
-      const flowStorage = getFlowStorage(client);
-
-      const elems = await flowStorage.getAll();
-      setKeys(Object.fromEntries(elems.map((e) => [e.id, e])));
-
-      p = await flowStorage.subscribe(async (id) => {
-        const newEntity = await flowStorage.getById(id);
-        if (!newEntity) return console.error('flow not found, id:', id);
-        setKeys((v) => ({ ...v, [id]: newEntity }));
-      });
-    })();
-    return () => {
-      if (p) p();
-    };
-  }, []);
-
-  //const availableHeight: number = height - 3;
+  const flows = useFlows();
 
   useInput((input: string, key: any) => {
     if (input === 'q' || key.escape) {
@@ -72,11 +112,17 @@ export const App: React.FC = () => {
 
   return (
     <Box flexDirection="column">
-      <Text>Keys:</Text>
-      {Object.entries(keys).map(([id, value]) => (
-        <Text key={id} bold>
-          {value.name}
-        </Text>
+      <Box flexDirection="row" gap={4}>
+        <Box width={24}>
+          <Text bold>ID</Text>
+        </Box>
+        <Box width={12}>
+          <Text bold>StartedAt</Text>
+        </Box>
+        <Text bold>Status</Text>
+      </Box>
+      {Object.entries(flows).map(([_, flow]) => (
+        <TaskRow key={flow.id} flow={flow} />
       ))}
     </Box>
   );

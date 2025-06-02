@@ -33,6 +33,9 @@ const wt = webhookTrigger('/hooks/baserow-update').schema(z.any()).build();
 export default flow('baserow_update')
   .trigger(wt)
   .$(printContext)
+  .$(printContext)
+  .$(printContext)
+
 //.for((_) => Array.from({ length: 10 }, (_, idx) => idx), (iter) =>
 //  iter.$(printContext)
 //    .$(printContext)

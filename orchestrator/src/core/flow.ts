@@ -70,10 +70,10 @@ const createRunner =
   <In extends object>(tasks: (Script | Flow)[], ctx: Record<string, any>) =>
   async (value: In, tracer: FlowTracer) => {
     let current: any = value;
-    let errorEncountered = false;
-    let cancelled = false;
-
-    const cancel = () => (cancelled = true);
+    let cancelledAt: number | undefined = undefined;
+    const cancel = () => {
+      cancelledAt = Date.now();
+    };
 
     for (const currentTask of tasks) {
       switch (currentTask.kind) {
@@ -81,13 +81,15 @@ const createRunner =
           const scriptTracer = await tracer.script(currentTask.name);
           const scriptLogger = scriptTracer.logger();
 
-          if (cancelled || errorEncountered) {
-            scriptTracer.updateStatus({ kind: 'cancelled' });
+          if (cancelledAt) {
+            scriptTracer.updateStatus({ kind: 'cancelled', cancelledAt: cancelledAt });
             continue;
           }
 
+          const startedAt = Date.now();
           try {
-            scriptTracer.updateStatus({ kind: 'ongoing' });
+            scriptTracer.updateStatus({ kind: 'ongoing', startedAt });
+
             current = await Promise.resolve(
               currentTask.run(
                 {
@@ -102,8 +104,10 @@ const createRunner =
               ),
             );
 
-            if (cancelled) {
-              scriptTracer.updateStatus({ kind: 'cancelled' });
+            const completedAt = Date.now();
+
+            if (cancelledAt) {
+              scriptTracer.updateStatus({ kind: 'cancelled', startedAt, cancelledAt: Date.now() });
               continue;
             }
 
@@ -111,10 +115,21 @@ const createRunner =
               ctx['store'][currentTask._store] = current;
             }
 
-            scriptTracer.updateStatus({ kind: 'success', data: JSON.stringify(current) });
+            scriptTracer.updateStatus({
+              kind: 'success',
+              startedAt,
+              completedAt,
+              data: JSON.stringify(current),
+            });
           } catch (e: unknown) {
-            scriptTracer.updateStatus({ kind: 'failure', error: String(e) });
-            errorEncountered = true;
+            const completedAt = Date.now();
+            scriptTracer.updateStatus({
+              kind: 'failure',
+              startedAt,
+              completedAt: Date.now(),
+              error: String(e),
+            });
+            cancelledAt = completedAt;
           }
           break;
         }

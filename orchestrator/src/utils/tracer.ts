@@ -10,11 +10,11 @@ type Log = {
 };
 
 type ScriptStatus =
-  | { kind: 'cancelled' }
+  | { kind: 'cancelled'; startedAt?: number; cancelledAt: number }
   | { kind: 'pending' }
-  | { kind: 'ongoing' }
-  | { kind: 'success'; data: string /* stringified */ }
-  | { kind: 'failure'; error: string };
+  | { kind: 'ongoing'; startedAt: number }
+  | { kind: 'success'; startedAt: number; completedAt: number; data: string /* stringified */ }
+  | { kind: 'failure'; startedAt: number; completedAt: number; error: string };
 
 type ScriptTrace = {
   id: string;
@@ -29,6 +29,13 @@ type ScriptTrace = {
 type TriggerTrace = {
   kind: 'webhook';
   data: string; // stringified
+  receivedAt: number;
+  metadata: {
+    method: string;
+    url: string;
+    headers: Record<string, string | string[] | undefined>;
+    ip: string;
+  };
 };
 
 type ScriptEntity = {
@@ -36,6 +43,7 @@ type ScriptEntity = {
   name: string;
   logs: Log[];
   status: ScriptStatus;
+  createdAt: number;
 
   store?: { key: string; value: string };
 };
@@ -47,7 +55,7 @@ type TaskTrace =
 export type FlowEntity = {
   id: string;
   name: string;
-  triggeredBy: TriggerTrace;
+  trigger: TriggerTrace;
   tasks: TaskTrace[];
   status: ScriptStatus['kind'];
 };
@@ -66,6 +74,7 @@ const createScriptTracer = async (client: RedisClient, flow: FlowEntity, script:
     name: script.name,
     logs: [],
     status: { kind: 'pending' },
+    createdAt: Date.now(),
   };
 
   await scriptStorage.set(scriptEntity);
@@ -123,7 +132,7 @@ export const getFlowStorage = (client: RedisClient) =>
 export const flowTraceFromFlow = (f: Flow, trigger: TriggerTrace): FlowEntity => ({
   id: nanoid(),
   name: f.name,
-  triggeredBy: trigger,
+  trigger: trigger,
   tasks: f.tree.map((s) => ({
     kind: 'script' as const,
     id: nanoid(),
@@ -156,7 +165,7 @@ export const createFlowTracer = async (client: RedisClient, flow: Flow, trigger:
   //};
 
   const updateTrigger = (trigger: TriggerTrace) => {
-    flowTrace.triggeredBy = trigger;
+    flowTrace.trigger = trigger;
     flowStorage.update(flowTrace);
   };
 

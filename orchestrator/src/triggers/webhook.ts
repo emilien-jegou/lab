@@ -32,10 +32,18 @@ const createRegister =
   async <Out>(flow: Flow<InferType<S>, Out>, client: RedisClient) => {
     addRoute(method, path, async (request: FastifyRequest, reply: FastifyReply) => {
       try {
+        const receivedAt = Date.now();
         const result = schema.parse(request.body) as InferType<S>;
         const flowTracer = await createFlowTracer(client, flow, {
           kind: 'webhook',
           data: JSON.stringify(result),
+          receivedAt,
+          metadata: {
+            method: request.method,
+            url: request.url,
+            headers: request.headers,
+            ip: request.ip,
+          },
         });
 
         flow.run(result, flowTracer);
