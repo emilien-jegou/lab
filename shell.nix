@@ -13,5 +13,8 @@ pkgs.mkShell {
     pkgs.yarn
     pkgs.nodePackages.typescript-language-server
     pkgs.vscode-langservers-extracted
+
+    # Debugging
+    pkgs.redisinsight
   ];
 }

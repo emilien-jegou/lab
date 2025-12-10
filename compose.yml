@@ -80,7 +80,6 @@ services:
       - auth
       - docling
       - db
-      - ollama
       - searxng
       - tika
       - watchtower
@@ -154,41 +153,6 @@ services:
     volumes:
       - /var/run/docker.sock:/var/run/docker.sock
 
-  comfyui:
-    image: yanwk/comfyui-boot:cu124-slim
-    env_file: env/comfyui.env
-    devices:
-      - "nvidia.com/gpu=all"
-    depends_on:
-      - watchtower
-    deploy:
-      replicas: 0
-    ports:
-      - 6604:8188
-    restart: unless-stopped
-    volumes:
-      - comfyui:/root/ComfyUI
-      - ./conf/comfyui/download-models.txt:/runner-scripts/download-models.txt
-
-  ollama:
-    depends_on:
-      - watchtower
-    env_file: env/ollama.env
-    devices:
-      - "nvidia.com/gpu=all"
-    healthcheck:
-      interval: 30s
-      retries: 5
-      start_period: 10s
-      test: curl --fail http://localhost:11434/api/version || exit 1
-      timeout: 3s
-    image: ollama/ollama:latest
-    ports:
-      - 11434:11434
-    restart: unless-stopped
-    volumes:
-      - ollama:/root/.ollama
-
   crawl4ai:
     image: unclecode/crawl4ai:latest
     container_name: crawl4ai
@@ -218,5 +182,3 @@ volumes:
   db_data: null
   openwebui: null
   redis: null
-  comfyui: null
-  ollama: null
