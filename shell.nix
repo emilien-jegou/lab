@@ -7,14 +7,12 @@ pkgs.mkShell {
     pkgs.docker
     pkgs.docker-compose
     pkgs.git
+    pkgs.sqlite-web
 
     # Orchestrator
     pkgs.bun
     pkgs.yarn
     pkgs.nodePackages.typescript-language-server
     pkgs.vscode-langservers-extracted
-
-    # Debugging
-    pkgs.redisinsight
   ];
 }
