@@ -1,0 +1,65 @@
+# NOT READY
+static_resources:
+  listeners:
+    - name: listener_http
+      address:
+        socket_address:
+          address: 0.0.0.0
+          port_value: 10000
+      filter_chains:
+        - filters:
+            - name: envoy.filters.network.http_connection_manager
+              typed_config:
+                "@type": type.googleapis.com/envoy.extensions.filters.network.http_connection_manager.v3.HttpConnectionManager
+                stat_prefix: ingress_http
+                route_config:
+                  name: local_route
+                  virtual_hosts:
+                    - name: backend
+                      domains: ["*"]
+                      routes:
+                        - match: { prefix: "/auth" }
+                          route: { cluster: auth }
+                        - match: { prefix: "/baserow" }
+                          route: { cluster: baserow }
+                        - match: { prefix: "/docling" }
+                          route: { cluster: docling }
+                        - match: { prefix: "/openwebui" }
+                          route: { cluster: openwebui }
+                        - match: { prefix: "/tika" }
+                          route: { cluster: tika }
+                http_filters:
+                  - name: envoy.filters.http.router
+
+  clusters:
+    - name: auth
+      connect_timeout: 0.25s
+      type: logical_dns
+      lb_policy: round_robin
+      load_assignment:
+        cluster_name: auth
+        endpoints:
+          - lb_endpoints:
+              - endpoint:
+                  address:
+                    socket_address:
+                      address: auth
+                      port_value: 80
+
+    - name: baserow
+      connect_timeout: 0.25s
+      type: logical_dns
+      lb_policy: round_robin
+      load_assignment:
+        cluster_name: baserow
+        endpoints:
+          - lb_endpoints:
+              - endpoint:
+                  address:
+                    socket_address:
+                      address: baserow
+                      port_value: 80
+
+    - name: docling
+      connect_time_
+

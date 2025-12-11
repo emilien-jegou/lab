@@ -1,1 +1,0 @@
-// Windmill can connect to a Postgres database and trigger runnables (scripts, flows) in response to database transactions (INSERT, UPDATE, DELETE) on specified tables, schemas, or the entire database. Listening is done using Postgres's logical replication streaming protocol, ensuring efficient and low-latency triggering. Learn more

@@ -41,9 +41,8 @@ search:
     - json
 
 server:
-  port: 8888
-  bind_address: "127.0.0.1"
-  base_url: / # "http://example.com/location"
+  bind_address: "0.0.0.0"
+  base_url: /
   limiter: false
   public_instance: false
 
@@ -58,7 +57,7 @@ server:
     Referrer-Policy: no-referrer
 
 valkey:
-  url: valkey://:${VALKEY_PASSWORD}@valkey:6379/0
+  url: VALKEY_URL_PLACEHOLDER
 
 ui:
   static_path: ""
@@ -148,19 +147,9 @@ engines:
     categories: [general, web]
     disabled: false
 
-  # Nix Packages Search (https://search.nixos.org/packages)
-  - name: nix packages
-    engine: xpath
-    shortcut: nixp
-    categories: [it, packages]
-    search_url: https://search.nixos.org/packages?query={query}
-    paging: true
-    results_xpath: //tbody/tr
-    url_xpath: .//a[contains(@href, "/packages/")]/@href
-    title_xpath: .//a[contains(@href, "/packages/")]
-    content_xpath: .//td[4]
-    disabled: false
-    about:
-        website: https://search.nixos.org/packages
-        results: HTML
+doi_resolvers:
+  oadoi.org: "https://oadoi.org/"
+  doi.org: "https://doi.org/"
+  doai.io: "https://dissem.in/"
 
+default_doi_resolver: "oadoi.org"

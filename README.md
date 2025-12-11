@@ -1,4 +1,6 @@
-# Lab starter
+# Local lab
+
+Subject to change -- fork it 👍
 
 ## Project Overview
 
@@ -14,6 +16,7 @@ Check the [shell.nix](./shell.nix) file.
 
 ## Setup
 
+1. Copy over the config files
 ```sh
 cp conf/searxng/settings.yml.example conf/searxng/settings.yml
 cp conf/searxng/uwsgi.ini.example conf/searxng/uwsgi.ini
@@ -22,17 +25,30 @@ cp -r env.example env
 ```
 
 ***The environment files can contain sensitive information such as API keys 
-and passwords. Do not check them into source control.
+and passwords. Do not check them into source control.***
 
-3. Add a unique SEARXNG_SEARCH value to your `env/searxng` file
+2. Modify your secrets, e.g.:
+*   **`env/secrets.env`**:
+    *   `WEBUI_SECRET_KEY`
+*   **`env/minio.env`**:
+    *   `MINIO_ROOT_USER` & `MINIO_ROOT_PASSWORD`
+*   **`env/searxng.env`**:
+    *   `SEARXNG_SECRET`
+*   **`env/db.env`**:
+    *   `POSTGRES_USER`, `POSTGRES_PASSWORD`, `POSTGRES_DB`
+*   **`env/crawl4ai.env`**: Choose a provider and give it an api key
+...
 
+3. Launch it
 ```sh
-docker compose up
+podman-compose up # Or docker-compose up
 ```
 
-This will provide the following services:
-- **openwebui**: http://localhost:6600
-- **baserow**: http://localhost:6601
-- **crawl4ai playground**: http://localhost:6603
+This setup will provide expose the following web endpoint:
+*   **Open WebUI**: **http://localhost:6600**
+*   **NocoDB**: **http://localhost:6601**
+*   **Minio Console**: **http://localhost:6602**
+*   **Crawl4AI Playground**: **http://localhost:6603**
+*   **Searxng**: **http://localhost:6604**
 
-Go to each and set an appropriate login/password
+You can check others expose ports in the compose file (e.g. 9000 for minio)

@@ -2,19 +2,23 @@
 
 !LICENSE
 !README.md
-!auth/
+!conf/
+!conf/**
 !env.example/
 !env.example/**
 !compose.yml
 !shell.nix
 !.envrc
-!conf/
-!conf/comfyui/
-!conf/searxng/
-!conf/comfyui/download-models.txt.example
-!conf/searxng/settings.yml.example
-!conf/searxng/uwsgi.ini.example
-!orchestrator/
+
+# orchestrator
+!lab/
+!lab/README.md
+!lab/bun.lock
+!lab/src/
+!lab/src/**
+!lab/package.json
+!lab/tsconfig.json
+
 !orchestrator/src/**
 !orchestrator/*
 !tui/

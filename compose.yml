@@ -1,42 +1,80 @@
 services:
-  orchestrator:
+  lab:
     image: oven/bun:latest
-    container_name: orchestrator
+    container_name: lab
     working_dir: /app
     ports:
-      - "6601:8108"
+      - "6605:8108"
     expose:
-     - 8108
+      - 8108
     volumes:
-      - ./orchestrator/:/app
-    command: bash -c "bun run watch"
+      - ./lab/:/app
+    command: bash -c "bun run dev"
     environment:
       - NODE_ENV=development
       - FORCE_COLOR=1
 
-  auth:
-    build:
-      context: ./auth
-      dockerfile: Dockerfile
-    env_file: env/auth.env
-    labels:
-      - "com.centurylinklabs.watchtower.enable=false"
+  nocodb:
+    image: "nocodb/nocodb:latest"
+    container_name: nocodb
+    env_file:
+      - env/db.env
+      - env/minio.env
+    environment:
+      NC_STORAGE_ADAPTER: s3
+      NC_S3_ENDPOINT: http://minio:9000
+      NC_S3_BUCKET: nocodb
+      NC_S3_ACCESS_KEY_ID: ${MINIO_ROOT_USER}
+      NC_S3_SECRET_ACCESS_KEY: ${MINIO_ROOT_PASSWORD}
+      NC_S3_FORCE_PATH_STYLE: "true"
+    ports:
+      - "6601:8080"
+    volumes:
+      - "nocodb_data:/usr/app/data"
+    depends_on:
+      db:
+        condition: service_healthy
+      minio:
+        condition: service_healthy
+    restart: always
+
+  minio:
+    image: minio/minio:latest
+    container_name: minio
+    env_file:
+      - env/minio.env
+    ports:
+      - "9000:9000"
+      - "6602:9001"
+    volumes:
+      - minio_data:/data
+    command: server /data --console-address ":9001"
+    healthcheck:
+      test: ["CMD", "curl", "-f", "http://localhost:9000/minio/health/live"]
+      interval: 30s
+      timeout: 20s
+      retries: 3
     restart: unless-stopped
 
-  baserow:
-    image: baserow/baserow:1.33.2
-    container_name: baserow
-    env_file: env/baserow.env
-    environment:
-      BASEROW_PUBLIC_URL: 'http://baserow:80'
-    ports:
-      - "80:80"
-    volumes:
-      - baserow_data:/baserow/data
+  create-minio-bucket:
+    image: minio/mc
+    depends_on:
+      - minio
+    env_file:
+      - env/minio.env
+    entrypoint: >
+      /bin/sh -c "
+      /usr/bin/mc alias set myminio http://minio:9000 $$MINIO_ROOT_USER $$MINIO_ROOT_PASSWORD;
+      /usr/bin/mc mb myminio/nocodb --ignore-existing;
+      "
+    restart: "no"
 
   db:
     image: pgvector/pgvector:pg15
-    env_file: env/db.env
+    container_name: db
+    env_file:
+      - env/db.env
+      - env/db.openwebui.env
     healthcheck:
       interval: 30s
       retries: 5
@@ -46,11 +84,13 @@ services:
     restart: unless-stopped
     volumes:
       - db_data:/var/lib/postgresql/data
+      - ./conf/postgres/initdb.d:/docker-entrypoint-initdb.d
     depends_on:
       - watchtower
 
   docling:
     image: quay.io/docling-project/docling-serve:latest
+    container_name: docling
     env_file: env/docling.env
     healthcheck:
       interval: 30s
@@ -59,14 +99,23 @@ services:
       test: curl --fail http://localhost:5001/health || exit 1
       timeout: 5s
     ports:
-      - 5001:5001
+      - "5001:5001"
     restart: unless-stopped
 
   openwebui:
     image: ghcr.io/open-webui/open-webui:cuda
-    env_file: env/openwebui.env
+    container_name: openwebui
+    env_file:
+      - env/secrets.env
+      - env/openwebui.env
+      - env/db.openwebui.env
+    volumes:
+      - ./conf/openwebui/entrypoint.sh:/app/entrypoint.sh
+      - openwebui:/app/backend/data
+    entrypoint: /app/entrypoint.sh
+    command: uvicorn open_webui.main:app --host 0.0.0.0 --port 8080
     ports:
-      - 6600:8080
+      - "6600:8080"
     healthcheck:
       interval: 30s
       retries: 5
@@ -74,36 +123,43 @@ services:
       test: curl --fail http://localhost:8080/health || exit 1
       timeout: 3s
     restart: unless-stopped
-    volumes:
-      - openwebui:/app/backend/data
     depends_on:
-      - auth
-      - docling
-      - db
-      - searxng
-      - tika
-      - watchtower
+      db:
+        condition: service_healthy
+      docling:
+        condition: service_started
+      searxng:
+        condition: service_started
+      tika:
+        condition: service_started
+      watchtower:
+        condition: service_started
 
-  redis:
-    image: redis/redis-stack:latest
-    env_file: env/redis.env
+  valkey:
+    image: valkey/valkey-bundle:latest
+    container_name: valkey
+    env_file: env/valkey.env
     healthcheck:
+      test: ["CMD-SHELL", "valkey-cli -a $$VALKEY_PASSWORD ping | grep PONG"]
       interval: 30s
+      timeout: 3s
       retries: 5
       start_period: 20s
-      test: ["CMD-SHELL", "redis-cli ping | grep PONG"]
-      timeout: 3s
     ports:
-      - 6379:6379
+      - "6379:6379"
     restart: unless-stopped
     volumes:
-      - redis:/data
+      - valkey:/data
+    command: ["sh", "-c", "valkey-server --requirepass $$VALKEY_PASSWORD"]
     depends_on:
       - watchtower
 
   searxng:
     image: searxng/searxng:latest
-    env_file: env/searxng.env
+    container_name: searxng
+    env_file:
+      - env/searxng.env
+      - env/valkey.env
     cap_add:
       - CHOWN
       - SETGID
@@ -112,28 +168,33 @@ services:
     cap_drop:
       - ALL
     depends_on:
-      - redis
-      - watchtower
+      valkey:
+        condition: service_healthy
+      watchtower:
+        condition: service_started
     healthcheck:
       interval: 30s
       retries: 5
       start_period: 10s
-      test: curl --fail http://localhost:8080/ || exit 1
+      test: curl --fail http://localhost:8888/ || exit 1
       timeout: 3s
     ports:
-      - 6605:8080
+      - "6604:8080"
     logging:
       driver: "json-file"
       options:
         max-size: "1m"
         max-file: "1"
     restart: unless-stopped
+    entrypoint: /usr/local/bin/entrypoint.sh
     volumes:
-      - ./conf/searxng/settings.yml:/etc/searxng/settings.yml:rw
-      - ./conf/searxng/uwsgi.ini:/etc/searxng/uwsgi.ini:rw
+      - ./conf/searxng/settings.template.yml:/etc/searxng/settings.template.yml:ro
+      - ./conf/searxng/entrypoint.sh:/usr/local/bin/entrypoint.sh:ro
+      - ./conf/searxng/uwsgi.ini:/etc/searxng/uwsgi.ini:ro
 
   tika:
     image: apache/tika:latest-full
+    container_name: tika
     env_file: env/tika.env
     healthcheck:
       interval: 30s
@@ -142,16 +203,17 @@ services:
       test: curl --fail http://localhost:9998/tika || exit 1
       timeout: 5s
     ports:
-      - 9998:9998
+      - "9998:9998"
     restart: unless-stopped
 
   watchtower:
     image: containrrr/watchtower
+    container_name: watchtower
     env_file: env/watchtower.env
     command: --cleanup --debug --interval 300
     restart: unless-stopped
     volumes:
-      - /var/run/docker.sock:/var/run/docker.sock
+      - /run/user/1000/podman/podman.sock:/var/run/docker.sock
 
   crawl4ai:
     image: unclecode/crawl4ai:latest
@@ -161,7 +223,7 @@ services:
     shm_size: "1g"
     env_file: env/crawl4ai.env
     volumes:
-      - /dev/shm:/dev/shm  # Chromium performance
+      - /dev/shm:/dev/shm
     deploy:
       resources:
         limits:
@@ -178,7 +240,8 @@ services:
     user: "appuser"
 
 volumes:
-  baserow_data: null
+  nocodb_data: null
+  minio_data: null
   db_data: null
   openwebui: null
-  redis: null
+  valkey: null

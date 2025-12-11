@@ -4,10 +4,11 @@
 
 pkgs.mkShell {
   buildInputs = [
-    pkgs.docker
-    pkgs.docker-compose
+    pkgs.podman
+    pkgs.podman-compose
     pkgs.git
     pkgs.sqlite-web
+    pkgs.valkey
 
     # Orchestrator
     pkgs.bun
