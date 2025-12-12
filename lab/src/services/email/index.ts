@@ -27,7 +27,8 @@ export const EmailProviderLive = Layer.unwrapEffect(
   Effect.gen(function*() {
     const config = yield* EmailConfig;
 
-    if (Option.isSome(config.resendApiKey)) {
+
+    if (config.emailEnabled == true && Option.isSome(config.resendApiKey)) {
       return ResendEmailProviderLive
     } else {
       return FakeEmailProvider

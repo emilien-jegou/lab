@@ -4,7 +4,7 @@ import { WorkflowEngineLayer } from "./core/engine"
 import { ServerLayer } from "./core/server"
 import { BaserowWorkflowLive } from "./flows/baserow-updater"
 import { EmailService, EmailProviderLive } from "./services/email"
-import { TelemetryLive } from "./config/telemetry"
+import { TelemetryLive } from "./services/telemetry"
 
 const WorkflowsLayer = Layer.mergeAll(
   BaserowWorkflowLive

@@ -11,12 +11,10 @@ export class SendEmailError extends Schema.TaggedError<SendEmailError>()(
 
 // Define the input schema for the sendEmail activity.
 const SendEmailInput = Schema.Struct({
-  id: Schema.String, // Used for idempotency or logging
+  id: Schema.String,
   to: Schema.String
 })
 
-// The sendEmail activity.
-// It uses the EmailService from the context to send the email.
 export const sendEmail = (
   input: Schema.Schema.Type<typeof SendEmailInput>
 ) =>

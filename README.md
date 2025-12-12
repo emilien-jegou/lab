@@ -5,10 +5,10 @@ Subject to change -- fork it 👍
 ## Project Overview
 
 This Lab Starter comes with the following:
-- **OpenWebUI**: A user-friendly frontend for interacting with local LLMs.
-- **Baserow**: No-code database for structured data collaboration.
+- **NocoDB**: DB for structured data editing.
 - **Crawl4AI**: Automated web crawling tailored for AI data ingestion.
-- **Watchtower**: Automatically updates running containers with the latest images.
+- **Searxng**: Search engine.
+- **Lab**: Workflow automation
 
 ## Dependencies
 
@@ -45,7 +45,6 @@ podman-compose up # Or docker-compose up
 ```
 
 This setup will provide expose the following web endpoint:
-*   **Open WebUI**: **http://localhost:6600**
 *   **NocoDB**: **http://localhost:6601**
 *   **Minio Console**: **http://localhost:6602**
 *   **Crawl4AI Playground**: **http://localhost:6603**

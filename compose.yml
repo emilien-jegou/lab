@@ -1,18 +1,55 @@
 services:
+  db:
+    image: pgvector/pgvector:pg15
+    container_name: db
+    env_file:
+      - env/db.env
+      - env/db.lab.env
+    healthcheck:
+      interval: 30s
+      retries: 5
+      start_period: 20s
+      test: ["CMD-SHELL", "pg_isready -d $${POSTGRES_DB} -U $${POSTGRES_USER}"]
+      timeout: 5s
+    restart: unless-stopped
+    volumes:
+      - db_data:/var/lib/postgresql/data
+      - ./conf/postgres/initdb.d:/docker-entrypoint-initdb.d
+    depends_on:
+      - watchtower
+    deploy:
+      resources:
+        limits:
+          memory: 2G
+        reservations:
+          memory: 128M
+
   lab:
     image: oven/bun:latest
     container_name: lab
     working_dir: /app
+    env_file:
+      - env/lab.env
+      - env/db.lab.env
+    depends_on:
+      db:
+        condition: service_healthy
     ports:
-      - "6605:8108"
+      - "6605:3000"
     expose:
-      - 8108
+      - 3000
     volumes:
       - ./lab/:/app
     command: bash -c "bun run dev"
     environment:
       - NODE_ENV=development
       - FORCE_COLOR=1
+    deploy:
+      resources:
+        limits:
+          memory: 1G
+        reservations:
+          memory: 256M
 
   nocodb:
     image: "nocodb/nocodb:latest"
@@ -37,6 +74,12 @@ services:
       minio:
         condition: service_healthy
     restart: always
+    deploy:
+      resources:
+        limits:
+          memory: 2G
+        reservations:
+          memory: 256M
 
   minio:
     image: minio/minio:latest
@@ -55,6 +98,12 @@ services:
       timeout: 20s
       retries: 3
     restart: unless-stopped
+    deploy:
+      resources:
+        limits:
+          memory: 768M
+        reservations:
+          memory: 128M
 
   create-minio-bucket:
     image: minio/mc
@@ -68,72 +117,11 @@ services:
       /usr/bin/mc mb myminio/nocodb --ignore-existing;
       "
     restart: "no"
-
-  db:
-    image: pgvector/pgvector:pg15
-    container_name: db
-    env_file:
-      - env/db.env
-      - env/db.openwebui.env
-    healthcheck:
-      interval: 30s
-      retries: 5
-      start_period: 20s
-      test: ["CMD-SHELL", "pg_isready -d $${POSTGRES_DB} -U $${POSTGRES_USER}"]
-      timeout: 5s
-    restart: unless-stopped
-    volumes:
-      - db_data:/var/lib/postgresql/data
-      - ./conf/postgres/initdb.d:/docker-entrypoint-initdb.d
-    depends_on:
-      - watchtower
-
-  docling:
-    image: quay.io/docling-project/docling-serve:latest
-    container_name: docling
-    env_file: env/docling.env
-    healthcheck:
-      interval: 30s
-      retries: 5
-      start_period: 10s
-      test: curl --fail http://localhost:5001/health || exit 1
-      timeout: 5s
-    ports:
-      - "5001:5001"
-    restart: unless-stopped
-
-  openwebui:
-    image: ghcr.io/open-webui/open-webui:cuda
-    container_name: openwebui
-    env_file:
-      - env/secrets.env
-      - env/openwebui.env
-      - env/db.openwebui.env
-    volumes:
-      - ./conf/openwebui/entrypoint.sh:/app/entrypoint.sh
-      - openwebui:/app/backend/data
-    entrypoint: /app/entrypoint.sh
-    command: uvicorn open_webui.main:app --host 0.0.0.0 --port 8080
-    ports:
-      - "6600:8080"
-    healthcheck:
-      interval: 30s
-      retries: 5
-      start_period: 10s
-      test: curl --fail http://localhost:8080/health || exit 1
-      timeout: 3s
-    restart: unless-stopped
-    depends_on:
-      db:
-        condition: service_healthy
-      docling:
-        condition: service_started
-      searxng:
-        condition: service_started
-      tika:
-        condition: service_started
-      watchtower:
-        condition: service_started
+    deploy:
+      resources:
+        limits:
+          memory: 128M
+          cpus: '0.5'
 
   valkey:
     image: valkey/valkey-bundle:latest
@@ -153,6 +141,12 @@ services:
     command: ["sh", "-c", "valkey-server --requirepass $$VALKEY_PASSWORD"]
     depends_on:
       - watchtower
+    deploy:
+      resources:
+        limits:
+          memory: 1G
+        reservations:
+          memory: 32M
 
   searxng:
     image: searxng/searxng:latest
@@ -191,6 +185,13 @@ services:
       - ./conf/searxng/settings.template.yml:/etc/searxng/settings.template.yml:ro
       - ./conf/searxng/entrypoint.sh:/usr/local/bin/entrypoint.sh:ro
       - ./conf/searxng/uwsgi.ini:/etc/searxng/uwsgi.ini:ro
+    deploy:
+      resources:
+        limits:
+          memory: 512M
+          cpus: '1.0'
+        reservations:
+          memory: 128M
 
   tika:
     image: apache/tika:latest-full
@@ -205,6 +206,12 @@ services:
     ports:
       - "9998:9998"
     restart: unless-stopped
+    deploy:
+      resources:
+        limits:
+          memory: 2G
+        reservations:
+          memory: 512M
 
   watchtower:
     image: containrrr/watchtower
@@ -214,6 +221,13 @@ services:
     restart: unless-stopped
     volumes:
       - /run/user/1000/podman/podman.sock:/var/run/docker.sock
+    deploy:
+      resources:
+        limits:
+          memory: 128M
+          cpus: '0.2'
+        reservations:
+          memory: 32M
 
   crawl4ai:
     image: unclecode/crawl4ai:latest
@@ -228,8 +242,6 @@ services:
       resources:
         limits:
           memory: 4G
-        reservations:
-          memory: 1G
     restart: unless-stopped
     healthcheck:
       test: ["CMD", "curl", "-f", "http://localhost:11235/health"]
@@ -243,5 +255,4 @@ volumes:
   nocodb_data: null
   minio_data: null
   db_data: null
-  openwebui: null
   valkey: null

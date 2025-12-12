@@ -2,13 +2,13 @@
 
 set -e
 
-# Create the user and database for OpenWebUI
+### LAB
+
 psql -v ON_ERROR_STOP=1 --username "$POSTGRES_USER" --dbname "postgres" <<-EOSQL
-    CREATE USER "${OPENWEBUI_DB_USER}" WITH PASSWORD '${OPENWEBUI_DB_PASSWORD}';
-    CREATE DATABASE "${OPENWEBUI_DB}" OWNER "${OPENWEBUI_DB_USER}";
+    CREATE USER "${LAB_POSTGRES_USER}" WITH PASSWORD '${LAB_POSTGRES_PASSWORD}';
+    CREATE DATABASE "${LAB_POSTGRES_DATABASE}" OWNER "${LAB_POSTGRES_USER}";
 EOSQL
 
-# Connect to the new database as the superuser and create the extension
-psql -v ON_ERROR_STOP=1 --username "$POSTGRES_USER" --dbname "${OPENWEBUI_DB}" <<-EOSQL
+psql -v ON_ERROR_STOP=1 --username "$LAB_POSTGRES_USER" --dbname "${LAB_POSTGRES_DATABASE}" <<-EOSQL
     CREATE EXTENSION IF NOT EXISTS vector;
 EOSQL
