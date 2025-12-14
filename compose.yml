@@ -13,7 +13,7 @@ services:
       timeout: 5s
     restart: unless-stopped
     volumes:
-      - db_data:/var/lib/postgresql/data
+      - ./data/postgres:/var/lib/postgresql/data
       - ./conf/postgres/initdb.d:/docker-entrypoint-initdb.d
     depends_on:
       - watchtower
@@ -67,7 +67,7 @@ services:
     ports:
       - "6601:8080"
     volumes:
-      - "nocodb_data:/usr/app/data"
+      - ./data/nocodb:/usr/app/data
     depends_on:
       db:
         condition: service_healthy
@@ -90,7 +90,8 @@ services:
       - "9000:9000"
       - "6602:9001"
     volumes:
-      - minio_data:/data
+      # CHANGED: Data -> ./data/minio
+      - ./data/minio:/data
     command: server /data --console-address ":9001"
     healthcheck:
       test: ["CMD", "curl", "-f", "http://localhost:9000/minio/health/live"]
@@ -137,7 +138,8 @@ services:
       - "6379:6379"
     restart: unless-stopped
     volumes:
-      - valkey:/data
+      # CHANGED: Data -> ./data/valkey
+      - ./data/valkey:/data
     command: ["sh", "-c", "valkey-server --requirepass $$VALKEY_PASSWORD"]
     depends_on:
       - watchtower
@@ -251,8 +253,182 @@ services:
       start_period: 40s
     user: "appuser"
 
-volumes:
-  nocodb_data: null
-  minio_data: null
-  db_data: null
-  valkey: null
+  zookeeper:
+    image: signoz/zookeeper:3.7.1
+    container_name: signoz-zookeeper
+    restart: unless-stopped
+    volumes:
+      - ./data/zookeeper:/bitnami/zookeeper:Z
+    environment:
+      - ZOO_SERVER_ID=1
+      - ALLOW_ANONYMOUS_LOGIN=yes
+      - ZOO_AUTOPURGE_INTERVAL=1
+    healthcheck:
+      test: echo srvr | nc localhost 2181
+      interval: 30s
+      timeout: 5s
+      retries: 3
+    deploy:
+      resources:
+        limits:
+          memory: 512M
+        reservations:
+          memory: 128M
+
+  init-clickhouse:
+    image: clickhouse/clickhouse-server:25.5.6
+    container_name: signoz-init-clickhouse
+    command:
+      - bash
+      - -c
+      - |
+        version="v0.0.1"
+        node_os=$$(uname -s | tr '[:upper:]' '[:lower:]')
+        node_arch=$$(uname -m | sed s/aarch64/arm64/ | sed s/x86_64/amd64/)
+        echo "Fetching histogram-binary for $${node_os}/$${node_arch}"
+        cd /tmp
+        wget -O histogram-quantile.tar.gz "https://github.com/SigNoz/signoz/releases/download/histogram-quantile%2F$${version}/histogram-quantile_$${node_os}_$${node_arch}.tar.gz"
+        tar -xvzf histogram-quantile.tar.gz
+        mv histogram-quantile /var/lib/clickhouse/user_scripts/histogramQuantile
+    restart: on-failure
+    volumes:
+      - ./conf/signoz/clickhouse/user_scripts:/var/lib/clickhouse/user_scripts/
+
+  clickhouse:
+    image: clickhouse/clickhouse-server:25.5.6
+    container_name: signoz-clickhouse
+    hostname: clickhouse
+    restart: unless-stopped
+    depends_on:
+      init-clickhouse:
+        condition: service_completed_successfully
+      zookeeper:
+        condition: service_healthy
+    ports:
+      - "6606:8123"
+      - "9000:9000"
+    volumes:
+      - ./conf/signoz/clickhouse/config.xml:/etc/clickhouse-server/config.xml
+      - ./conf/signoz/clickhouse/users.xml:/etc/clickhouse-server/users.xml
+      - ./conf/signoz/clickhouse/custom-function.xml:/etc/clickhouse-server/custom-function.xml
+      - ./conf/signoz/clickhouse/cluster.xml:/etc/clickhouse-server/config.d/cluster.xml
+      - ./conf/signoz/clickhouse/user_scripts:/var/lib/clickhouse/user_scripts/
+      - ./data/clickhouse:/var/lib/clickhouse/
+    healthcheck:
+      test: wget --no-verbose --tries=1 --spider http://localhost:8123/ping || exit 1
+      interval: 30s
+      timeout: 5s
+      retries: 3
+    environment:
+      - CLICKHOUSE_SKIP_USER_SETUP=1
+    deploy:
+      resources:
+        limits:
+          memory: 2G
+        reservations:
+          memory: 512M
+
+  schema-migrator-sync:
+    image: signoz/signoz-schema-migrator:v0.129.12
+    container_name: signoz-schema-migrator-sync
+    command:
+      - sync
+      - --dsn=tcp://clickhouse:9000
+      - --up=
+    depends_on:
+      clickhouse:
+        condition: service_healthy
+    restart: on-failure
+
+  signoz:
+    image: signoz/signoz:v0.104.0
+    container_name: signoz-standalone
+    command:
+      - --config=/root/config/prometheus.yml
+    ports:
+      - "6607:8080" # SigNoz UI
+    volumes:
+      - ./conf/signoz/prometheus.yml:/root/config/prometheus.yml
+      - ./conf/signoz/dashboards:/root/config/dashboards
+      - ./data/signoz:/var/lib/signoz/
+    environment:
+      - SIGNOZ_ALERTMANAGER_PROVIDER=signoz
+      - SIGNOZ_TELEMETRYSTORE_CLICKHOUSE_DSN=tcp://clickhouse:9000
+      - SIGNOZ_SQLSTORE_SQLITE_PATH=/var/lib/signoz/signoz.db
+      - DASHBOARDS_PATH=/root/config/dashboards
+      - STORAGE=clickhouse
+      - GODEBUG=netdns=go
+      - TELEMETRY_ENABLED=true
+      - DEPLOYMENT_TYPE=docker-standalone-amd
+    depends_on:
+      clickhouse:
+        condition: service_healthy
+      schema-migrator-sync:
+        condition: service_completed_successfully
+    healthcheck:
+      test: ["CMD", "wget", "--spider", "-q", "http://localhost:8080/api/v1/health"]
+      interval: 30s
+      timeout: 5s
+      retries: 3
+    deploy:
+      resources:
+        limits:
+          memory: 1G
+        reservations:
+          memory: 256M
+
+  otel-collector:
+    image: signoz/signoz-otel-collector:v0.129.12
+    container_name: signoz-otel-collector
+    command:
+      - --config=/etc/otel-collector-config.yaml
+      - --manager-config=/etc/manager-config.yaml
+      - --copy-path=/var/tmp/collector-config.yaml
+      - --feature-gates=-pkg.translator.prometheus.NormalizeName
+    volumes:
+      - ./conf/signoz/otel-collector-config.yaml:/etc/otel-collector-config.yaml
+      - ./conf/signoz/otel-collector-opamp-config.yaml:/etc/manager-config.yaml
+      - /:/hostfs:ro
+      - /var/run/docker.sock:/var/run/docker.sock:ro
+    environment:
+      - OTEL_RESOURCE_ATTRIBUTES=host.name=signoz-host,os.type=linux
+      - LOW_CARDINAL_EXCEPTION_GROUPING=false
+    ports:
+      - "4317:4317"
+      - "4318:4318"
+    depends_on:
+      signoz:
+        condition: service_healthy
+    deploy:
+      resources:
+        limits:
+          memory: 1G
+        reservations:
+          memory: 128M
+
+  marimo:
+    build:
+      context: ./conf/marimo
+    image: localhost/marimo:latest
+    container_name: marimo
+    working_dir: /app
+    env_file:
+      - env/db.env
+    ports:
+      - "6608:2718"
+    volumes:
+      - ./marimo:/app
+    environment:
+      - MARIMO_SKIP_UPDATE_CHECK=1
+    restart: unless-stopped
+    healthcheck:
+      test: ["CMD", "curl", "-f", "http://localhost:2718/health"]
+      interval: 30s
+      timeout: 5s
+      retries: 3
+    deploy:
+      resources:
+        limits:
+          memory: 2G
+        reservations:
+          memory: 256M
