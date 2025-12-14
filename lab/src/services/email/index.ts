@@ -1,5 +1,4 @@
-import { Effect, Schema } from "effect"
-import { Layer, Option } from "effect"
+import { Layer, Option, Effect, Schema } from "effect"
 import { EmailConfig } from "../../config/email"
 import { EmailProvider } from "./provider"
 import { FakeEmailProvider } from "./fake"
