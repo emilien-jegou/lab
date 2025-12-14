@@ -13,7 +13,7 @@ services:
       timeout: 5s
     restart: unless-stopped
     volumes:
-      - ./data/postgres:/var/lib/postgresql/data
+      - ./__internal/postgres:/var/lib/postgresql/data
       - ./conf/postgres/initdb.d:/docker-entrypoint-initdb.d
     depends_on:
       - watchtower
@@ -67,7 +67,7 @@ services:
     ports:
       - "6601:8080"
     volumes:
-      - ./data/nocodb:/usr/app/data
+      - ./__internal/nocodb:/usr/app/data
     depends_on:
       db:
         condition: service_healthy
@@ -90,9 +90,9 @@ services:
       - "9000:9000"
       - "6602:9001"
     volumes:
-      # CHANGED: Data -> ./data/minio
-      - ./data/minio:/data
-    command: server /data --console-address ":9001"
+      # CHANGED: Data -> ./__internal/minio
+      - ./__internal/minio:/data
+    command: server./__internal --console-address ":9001"
     healthcheck:
       test: ["CMD", "curl", "-f", "http://localhost:9000/minio/health/live"]
       interval: 30s
@@ -138,8 +138,8 @@ services:
       - "6379:6379"
     restart: unless-stopped
     volumes:
-      # CHANGED: Data -> ./data/valkey
-      - ./data/valkey:/data
+      # CHANGED: Data -> ./__internal/valkey
+      - ./__internal/valkey:/data
     command: ["sh", "-c", "valkey-server --requirepass $$VALKEY_PASSWORD"]
     depends_on:
       - watchtower
@@ -258,7 +258,7 @@ services:
     container_name: signoz-zookeeper
     restart: unless-stopped
     volumes:
-      - ./data/zookeeper:/bitnami/zookeeper:Z
+      - ./__internal/zookeeper:/bitnami/zookeeper:Z
     environment:
       - ZOO_SERVER_ID=1
       - ALLOW_ANONYMOUS_LOGIN=yes
@@ -313,7 +313,7 @@ services:
       - ./conf/signoz/clickhouse/custom-function.xml:/etc/clickhouse-server/custom-function.xml
       - ./conf/signoz/clickhouse/cluster.xml:/etc/clickhouse-server/config.d/cluster.xml
       - ./conf/signoz/clickhouse/user_scripts:/var/lib/clickhouse/user_scripts/
-      - ./data/clickhouse:/var/lib/clickhouse/
+      - ./__internal/clickhouse:/var/lib/clickhouse/
     healthcheck:
       test: wget --no-verbose --tries=1 --spider http://localhost:8123/ping || exit 1
       interval: 30s
@@ -350,7 +350,7 @@ services:
     volumes:
       - ./conf/signoz/prometheus.yml:/root/config/prometheus.yml
       - ./conf/signoz/dashboards:/root/config/dashboards
-      - ./data/signoz:/var/lib/signoz/
+      - ./__internal/signoz:/var/lib/signoz/
     environment:
       - SIGNOZ_ALERTMANAGER_PROVIDER=signoz
       - SIGNOZ_TELEMETRYSTORE_CLICKHOUSE_DSN=tcp://clickhouse:9000

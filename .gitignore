@@ -18,8 +18,3 @@
 !lab/src/**
 !lab/package.json
 !lab/tsconfig.json
-
-!orchestrator/src/**
-!orchestrator/*
-!tui/
-!tui/**
