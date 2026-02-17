@@ -1,69 +1,93 @@
-import { HttpMethod, HttpRouter, HttpServerRequest, HttpServerResponse } from "@effect/platform"
-import type { HttpBodyError } from "@effect/platform/HttpBody"
-import type { RequestError } from "@effect/platform/HttpServerError"
-import { Effect, Schema } from "effect"
-import type { ParseError } from "effect/ParseResult"
+import { HttpRouter, HttpMethod, HttpServerRequest, HttpServerResponse } from "@effect/platform"
+import { Effect, Schema, Queue, Match } from "effect"
+import { Trigger } from "./base"
+import { RouteRegistry } from "../system/router"
 
-type ExecutableWorkflow<I, E, R> = {
-  execute: (payload: I) => Effect.Effect<any, E, R>
+type ParserType = "json" | "form" | "multipart" | "text"
+
+interface WebhookConfig<I> {
+  readonly path: HttpRouter.PathInput
+  readonly method: HttpMethod.HttpMethod
+  readonly parser: ParserType
+  readonly schema: Schema.Schema<I, any, any>
 }
 
-export class WebhookTriggerBuilder<I> {
-  constructor(
-    private path: HttpRouter.PathInput,
-    private method: HttpMethod.HttpMethod = "POST",
-    private payloadSchema: Schema.Schema<I, any> = Schema.Any as any
-  ) { }
+export class WebhookTrigger<I> extends Trigger<I, never, RouteRegistry> {
+  readonly _tag = "Webhook"
 
-  methodType(method: HttpMethod.HttpMethod) {
-    this.method = method
-    return this
+  constructor(private readonly config: WebhookConfig<I>) {
+    super()
   }
 
-  schema<NewI>(schema: Schema.Schema<NewI, any>) {
-    return new WebhookTriggerBuilder<NewI>(this.path, this.method, schema)
+  get meta() {
+    return {
+      path: String(this.config.path),
+      method: this.config.method,
+      parser: this.config.parser
+    }
   }
 
-  // The return type is now fully updated to include RequestError.
-  workflow<E, R>(handler: (payload: I) => Effect.Effect<any, E, R>): HttpRouter.Route<E | ParseError | HttpBodyError | RequestError, R>
-  workflow<E, R>(workflow: ExecutableWorkflow<I, E, R>): HttpRouter.Route<E | ParseError | HttpBodyError | RequestError, R>
-  workflow<E, R>(
-    handlerOrWorkflow: ((payload: I) => Effect.Effect<any, E, R>) | ExecutableWorkflow<I, E, R>
-  ): HttpRouter.Route<E | ParseError | HttpBodyError | RequestError, R> {
-    const payloadSchema = this.payloadSchema;
+  get payloadSchema() {
+    return this.config.schema
+  }
 
-    return HttpRouter.makeRoute(
-      this.method,
-      this.path,
-      Effect.gen(function*() {
-        const body = yield* HttpServerRequest.schemaBodyJson(payloadSchema)
-        const context = yield* Effect.context<R>()
+  json<NewI>(schema: Schema.Schema<NewI, any, any>) {
+    return new WebhookTrigger<NewI>({ ...this.config, parser: "json", schema })
+  }
 
-        let workflowEffect: Effect.Effect<any, E, R>;
+  form<NewI>(schema: Schema.Schema<NewI, any, any>) {
+    return new WebhookTrigger<NewI>({ ...this.config, parser: "form", schema })
+  }
 
-        if (typeof handlerOrWorkflow === "function") {
-          workflowEffect = handlerOrWorkflow(body);
-        } else {
-          // it's a workflow:
-          workflowEffect = handlerOrWorkflow.execute(body);
-        }
+  multipart<NewI>(schema: Schema.Schema<NewI, any, any>) {
+    return new WebhookTrigger<NewI>({ ...this.config, parser: "multipart", schema })
+  }
 
-        const runnable = workflowEffect.pipe(
-          Effect.provide(context),
-          Effect.onError((cause) => Effect.logError("Workflow execution failed in fork", cause)),
-          Effect.withSpan("workflow.fork")
-        )
+  protected load(queue: Queue.Queue<unknown>) {
+    return Effect.gen(this, function*() {
+      const registry = yield* RouteRegistry
+      const { config } = this
 
-        yield* Effect.log("Fork daemon");
-        yield* Effect.forkDaemon(runnable);
-
-        return yield* HttpServerResponse.json({ status: "accepted" })
-      }).pipe(
-        // Add a span to the main request handler
-        Effect.withSpan("webhook.trigger.handler")
+      const parseBody = Match.value(config.parser).pipe(
+        Match.when("json", () => HttpServerRequest.schemaBodyJson(config.schema)),
+        Match.when("form", () => HttpServerRequest.schemaBodyUrlParams(config.schema)),
+        Match.when("multipart", () => HttpServerRequest.schemaBodyMultipart(config.schema)),
+        Match.when("text", () => Effect.map(HttpServerRequest.HttpServerRequest, r => r.text)),
+        Match.exhaustive
       )
-    )
+
+      const route = HttpRouter.makeRoute(config.method, config.path, Effect.gen(function*() {
+        const body = yield* parseBody
+        yield* queue.offer(body)
+        return yield* HttpServerResponse.json({ status: "accepted" }, { status: 202 })
+      }))
+
+      yield* registry.register(route)
+      yield* Effect.logInfo(`[Webhook] Mounted ${config.method} ${config.path}`)
+    })
   }
 }
 
-export const webhookTrigger = (path: HttpRouter.PathInput) => new WebhookTriggerBuilder(path)
+// Static Entry Points
+export const Webhook = {
+  post: (path: HttpRouter.PathInput) => new WebhookTrigger({
+    path,
+    method: "POST",
+    parser: "json",
+    schema: Schema.Any
+  }),
+
+  get: (path: HttpRouter.PathInput) => new WebhookTrigger({
+    path,
+    method: "GET",
+    parser: "text",
+    schema: Schema.Any
+  }),
+
+  make: (path: HttpRouter.PathInput) => new WebhookTrigger({
+    path,
+    method: "POST",
+    parser: "json",
+    schema: Schema.Any
+  })
+}

@@ -1,5 +1,5 @@
 import { Layer, Option, Effect, Schema } from "effect"
-import { EmailConfig } from "../../config/email"
+import { EmailConfig } from "~/config/email"
 import { EmailProvider } from "./provider"
 import { FakeEmailProvider } from "./fake"
 import { ResendEmailProviderLive } from "./resend"
@@ -25,7 +25,6 @@ export class EmailService extends Effect.Service<EmailService>()("EmailService",
 export const EmailProviderLive = Layer.unwrapEffect(
   Effect.gen(function*() {
     const config = yield* EmailConfig;
-
 
     if (config.emailEnabled == true && Option.isSome(config.resendApiKey)) {
       return ResendEmailProviderLive
