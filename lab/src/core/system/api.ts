@@ -1,62 +1,43 @@
 import { HttpRouter, HttpServerRequest, HttpServerResponse } from "@effect/platform"
 import { SqlClient } from "@effect/sql"
-import { Effect, Schema, Layer } from "effect"
-import { defineBroker } from "./broker"
+import { Effect, Layer } from "effect"
 import { FrameworkConfig } from "./config"
-import { WorkflowTracker } from "./tracker"
+import { SystemWorkflowBroker, WorkflowEventSchema, WorkflowTracker } from "./tracker"
 import { RouteRegistry } from "./router"
 import { stream } from "../triggers/stream"
 
-const WorkflowEventSchema = Schema.Union(
-  Schema.Struct({
-    action: Schema.Literal("start"),
-    id: Schema.String,
-    triggerType: Schema.String,
-    meta: Schema.Unknown,
-    payload: Schema.Unknown,
-    timestamp: Schema.Number
-  }),
-  Schema.Struct({
-    action: Schema.Literal("complete"),
-    id: Schema.String,
-    timestamp: Schema.Number
-  }),
-  Schema.Struct({
-    action: Schema.Literal("fail"),
-    id: Schema.String,
-    error: Schema.String,
-    timestamp: Schema.Number
-  })
+import { defineModule } from "./module" // <-- Import this
+
+export const DbWorkflowAggregatorLive = defineModule(
+  "internal",
+  stream("system:db-workflow-aggregator", SystemWorkflowBroker.subscribe())
+    .schema(WorkflowEventSchema)
+    .bind((payload) =>
+      Effect.gen(function*() {
+        const sql = yield* SqlClient.SqlClient
+        if (payload.action === "start") {
+          yield* sql`
+            INSERT INTO system_workflow_runs (id, trigger_type, status, start_time, meta, payload) 
+            VALUES (
+              ${payload.id},
+              ${payload.triggerType},
+              'running',
+              ${payload.timestamp},
+              ${JSON.stringify(payload.meta)},
+              ${JSON.stringify(payload.payload)}
+            )
+          `
+        } else if (payload.action === "complete") {
+          yield* sql`UPDATE system_workflow_runs SET status = 'completed', end_time = ${payload.timestamp} WHERE id = ${payload.id}`
+        } else if (payload.action === "fail") {
+          yield* sql`UPDATE system_workflow_runs SET status = 'failed', end_time = ${payload.timestamp}, error = ${payload.error} WHERE id = ${payload.id}`
+        }
+      }).pipe(
+        Effect.catchAllCause((c) => Effect.logError("Workflow DB update failed", c))
+      )
+    )
 )
 
-export const SystemWorkflowBroker = defineBroker('system:workflows', WorkflowEventSchema);
-
-export const DbWorkflowAggregatorLive = stream("db-workflow-aggregator", SystemWorkflowBroker.subscribe())
-  .schema(WorkflowEventSchema)
-  .bindAsLayer((payload) =>
-    Effect.gen(function*() {
-      const sql = yield* SqlClient.SqlClient
-      if (payload.action === "start") {
-        yield* sql`
-          INSERT INTO system_workflow_runs (id, trigger_type, status, start_time, meta, payload) 
-          VALUES (
-            ${payload.id},
-            ${payload.triggerType},
-            'running',
-            ${payload.timestamp},
-            ${JSON.stringify(payload.meta)},
-            ${JSON.stringify(payload.payload)}
-          )
-        `
-      } else if (payload.action === "complete") {
-        yield* sql`UPDATE system_workflow_runs SET status = 'completed', end_time = ${payload.timestamp} WHERE id = ${payload.id}`
-      } else if (payload.action === "fail") {
-        yield* sql`UPDATE system_workflow_runs SET status = 'failed', end_time = ${payload.timestamp}, error = ${payload.error} WHERE id = ${payload.id}`
-      }
-    }).pipe(
-      Effect.catchAllCause((c) => Effect.logError("Workflow DB update failed", c))
-    )
-  )
 
 const SystemRouter = HttpRouter.empty.pipe(
   HttpRouter.get("/__system/conf", Effect.gen(function*() {

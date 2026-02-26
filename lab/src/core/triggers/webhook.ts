@@ -69,7 +69,7 @@ export class WebhookTrigger<I> extends Trigger<I, never, RouteRegistry> {
 }
 
 // Static Entry Points
-export const Webhook = {
+export const webhook = {
   post: (path: HttpRouter.PathInput) => new WebhookTrigger({
     path,
     method: "POST",

@@ -1,6 +1,7 @@
 import { Effect, Layer, Logger, HashMap, Queue, Console } from "effect"
 import { logger } from "../triggers/logger"
 import { MessageBroker } from "./broker"
+import { defineModule } from "./module";
 
 export interface LogEvent {
   readonly level: string;
@@ -43,23 +44,26 @@ export const LogIngressLive = Layer.effectDiscard(
   })
 )
 
-export const LokiLogAggregatorLive = logger().bindAsLayer((evt) =>
-  Effect.gen(function*() {
-    const lokiUrl = process.env.LOKI_URL || "http://localhost:3100"
-    yield* Effect.tryPromise({
-      try: () => fetch(`${lokiUrl}/loki/api/v1/push`, {
-        method: "POST",
-        headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({
-          streams: [{
-            stream: { app: "lab", level: evt.level.toLowerCase() },
-            values: [[(evt.timestamp.getTime() * 1000000).toString(), evt.message]]
-          }]
-        })
-      }),
-      catch: () => new Error("Loki Push Failed")
-    })
-  }).pipe(
-    Effect.catchAllCause((c) => Effect.logError("Loki push failed", c))
+export const LokiLogAggregatorLive = defineModule(
+  "internal",
+  logger().bind((evt) =>
+    Effect.gen(function*() {
+      const lokiUrl = process.env.LOKI_URL || "http://localhost:3100"
+      yield* Effect.tryPromise({
+        try: () => fetch(`${lokiUrl}/loki/api/v1/push`, {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({
+            streams: [{
+              stream: { app: "lab", level: evt.level.toLowerCase() },
+              values: [[(evt.timestamp.getTime() * 1000000).toString(), evt.message]]
+            }]
+          })
+        }),
+        catch: () => new Error("Loki Push Failed")
+      })
+    }).pipe(
+      Effect.catchAllCause((c) => Effect.logError("Loki push failed", c))
+    )
   )
 )

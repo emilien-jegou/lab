@@ -1,6 +1,7 @@
 import { Effect, Schema, Stream, ParseResult, Queue, Layer } from "effect"
 import { WorkflowTracker } from "../system/tracker"
-import { FrameworkConfig } from "../system/config" // Direct import
+import { FrameworkConfig } from "../system/config"
+import { ModuleContext } from "../system/module"
 
 export type Executable<I, A, E, R> = {
   readonly execute: (payload: I) => Effect.Effect<A, E, R>
@@ -17,9 +18,21 @@ export abstract class Trigger<Payload, E, R> {
 
   protected abstract load(queue: Queue.Queue<unknown>): Effect.Effect<void, E, R>
 
+  // Updated to use unwrapEffect
+  bind<A, HE, HR>(
+    handler: TriggerHandler<Payload, A, HE, HR>
+  ): Layer.Layer<never, E | HE | ParseResult.ParseError, R | HR | FrameworkConfig | ModuleContext> {
+    return Layer.unwrapEffect(
+      Effect.gen(this, function*() {
+        const moduleCtx = yield* ModuleContext
+        return this.bindAsLayer(moduleCtx.id, handler)
+      })
+    )
+  }
+
   bindAsLayer<A, HE, HR>(
+    moduleId: string,
     handler: TriggerHandler<Payload, A, HE, HR>,
-    moduleId: string = "default"
   ): Layer.Layer<never, E | HE | ParseResult.ParseError, R | HR | FrameworkConfig> {
     return Layer.scopedDiscard(
       Effect.gen(this, function*() {

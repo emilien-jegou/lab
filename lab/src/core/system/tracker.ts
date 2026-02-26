@@ -1,7 +1,30 @@
-import { Context, Effect, Layer } from "effect"
+import { Context, Effect, Layer, Schema } from "effect"
 import { SqlClient } from "@effect/sql"
-import { MessageBroker, type BrokerPayload } from "./broker"
-import { SystemWorkflowBroker } from "./api";
+import { defineBroker, MessageBroker, type BrokerPayload } from "./broker"
+
+export const WorkflowEventSchema = Schema.Union(
+  Schema.Struct({
+    action: Schema.Literal("start"),
+    id: Schema.String,
+    triggerType: Schema.String,
+    meta: Schema.Unknown,
+    payload: Schema.Unknown,
+    timestamp: Schema.Number
+  }),
+  Schema.Struct({
+    action: Schema.Literal("complete"),
+    id: Schema.String,
+    timestamp: Schema.Number
+  }),
+  Schema.Struct({
+    action: Schema.Literal("fail"),
+    id: Schema.String,
+    error: Schema.String,
+    timestamp: Schema.Number
+  })
+)
+
+export const SystemWorkflowBroker = defineBroker('system:workflows', WorkflowEventSchema);
 
 export interface WorkflowRun {
   readonly id: string;

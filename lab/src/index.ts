@@ -17,7 +17,7 @@ import { RouteRegistry, RouteRegistryLive } from "./core/system"
 import { WorkflowTrackerLive } from "./core/system"
 import { FrameworkLogger, LogIngressLive } from "./core/system"
 import { LokiLogAggregatorLive, DbWorkflowAggregatorLive, SystemRouterLive } from "./core/system"
-import { KitchenSinkLive } from "./modules/example"
+import { ExampleLive } from "./modules/example"
 
 const isProd = process.env.NODE_ENV === "production"
 
@@ -61,7 +61,7 @@ const ServerLive = Layer.scopedDiscard(
  */
 const TrackedLogic = Layer.mergeAll(
   ServerLive,
-  KitchenSinkLive
+  ExampleLive
 ).pipe(
   Layer.provide(Logger.add(FrameworkLogger)),
   Layer.provide(WorkflowTrackerLive)

@@ -1,6 +1,7 @@
 import { Workflow } from "@effect/workflow"
 import { Effect, Layer, Schema } from "effect"
-import { Webhook } from "~/core/triggers"
+import { webhook } from "~/core/triggers"
+import { defineModule } from "~/core/system/module"
 
 const UserSignupSchema = Schema.Struct({ id: Schema.String })
 
@@ -18,11 +19,11 @@ const OnboardingWorkflowLive = OnboardingWorkflow.toLayer(
   })
 )
 
-const UserSignupTriggerLive = Webhook.post("/demo")
-  .json(UserSignupSchema)
-  .bindAsLayer(OnboardingWorkflow, 'kitchen-sink')
-
-export const KitchenSinkLive = Layer.mergeAll(
-  OnboardingWorkflowLive,
-  UserSignupTriggerLive
+// Here is the clean approach you asked for:
+export const ExampleLive = defineModule(
+  "example",
+  Layer.mergeAll(
+    OnboardingWorkflowLive,
+    webhook.post("/demo").json(UserSignupSchema).bind(OnboardingWorkflow)
+  )
 )
