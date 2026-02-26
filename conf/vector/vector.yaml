@@ -1,0 +1,74 @@
+data_dir: /var/lib/vector
+
+# Vector API / Healthcheck
+api:
+  enabled: true
+  address: "0.0.0.0:8688"
+
+# ------------------------------------------------------------------------------
+# Ingestion Sources
+# ------------------------------------------------------------------------------
+sources:
+  # HTTP log ingress from Lab or external microservices
+  app_in:
+    type: http_server
+    address: "0.0.0.0:8686"
+    encoding: json
+    strict_path: false
+
+# ------------------------------------------------------------------------------
+# Transformations & Enrichment
+# ------------------------------------------------------------------------------
+transforms:
+  normalize:
+    type: remap
+    inputs:
+      - app_in
+    source: |
+      # Retain original event timestamp or inject current server timestamp
+      if !exists(.timestamp) {
+        .timestamp = to_unix_timestamp(now(), unit: "milliseconds")
+      }
+      # OpenObserve indexes time via _timestamp in microseconds
+      if !exists(._timestamp) {
+        ._timestamp = to_unix_timestamp(now(), unit: "microseconds")
+      }
+      # Preserve or assign default source tag
+      if !exists(.source) {
+        .source = "lab"
+      }
+
+# ------------------------------------------------------------------------------
+# Sinks
+# ------------------------------------------------------------------------------
+sinks:
+  # 1. Forward normalized logs to OpenObserve
+  openobserve_out:
+    type: http
+    inputs:
+      - normalize
+    uri: "http://openobserve:5080/api/default/default/_json"
+    method: post
+    auth:
+      strategy: basic
+      user: "admin@example.com"
+      password: "ChangeMe123!"
+    encoding:
+      codec: json
+    healthcheck:
+      enabled: false
+
+  # 2. Stream logs to Lab WebSocket consumer
+  websocket_out:
+    type: websocket
+    inputs:
+      - normalize
+    uri: "ws://lab:8687"
+    encoding:
+      codec: json
+    healthcheck:
+      enabled: false
+    buffer:
+      type: disk
+      max_size: 1048576000 # 1 GiB
+      when_full: drop_newest

@@ -1,129 +1,237 @@
-import { Context, Effect, Layer, Schema } from "effect"
-import { SqlClient } from "@effect/sql"
-import { defineBroker, MessageBroker, type BrokerPayload } from "./broker"
+// lab/src/core/system/tracker.ts
+import { Effect, Schema, Stream } from 'effect';
 
-export const WorkflowEventSchema = Schema.Union(
+import { document } from '~/services/surrealdb/api';
+import { dbschema, id as surrealId } from '~/services/surrealdb/api-builder';
+
+import { defineBroker, MessageBroker, type BrokerPayload } from './broker';
+
+export const ExecutionEventSchema = Schema.Union(
   Schema.Struct({
-    action: Schema.Literal("start"),
+    action: Schema.Literal('start'),
     id: Schema.String,
+    moduleId: Schema.String,
     triggerType: Schema.String,
+    triggerName: Schema.optional(Schema.String),
     meta: Schema.Unknown,
     payload: Schema.Unknown,
-    timestamp: Schema.Number
+    timestamp: Schema.Number,
   }),
   Schema.Struct({
-    action: Schema.Literal("complete"),
+    action: Schema.Literal('complete'),
     id: Schema.String,
-    timestamp: Schema.Number
+    timestamp: Schema.Number,
   }),
   Schema.Struct({
-    action: Schema.Literal("fail"),
+    action: Schema.Literal('fail'),
     id: Schema.String,
     error: Schema.String,
-    timestamp: Schema.Number
-  })
-)
+    timestamp: Schema.Number,
+  }),
+);
 
-export const SystemWorkflowBroker = defineBroker('system:workflows', WorkflowEventSchema);
+export const SystemExecutionBroker = defineBroker('system:executions', ExecutionEventSchema);
 
-export interface WorkflowRun {
-  readonly id: string;
-  readonly triggerType: string;
-  readonly status: "running" | "completed" | "failed";
-  readonly startTime: number;
-  readonly endTime?: number;
-  readonly error?: string;
-  readonly meta: any;    // Added
-  readonly payload: any; // Added
-}
+export const ExecutionRecordSchema = Schema.Struct({
+  id: Schema.String,
+  moduleId: Schema.String,
+  triggerType: Schema.String,
+  triggerName: Schema.optional(Schema.String),
+  status: Schema.Literal('running', 'completed', 'failed'),
+  startTime: Schema.Number,
+  endTime: Schema.optional(Schema.Number),
+  error: Schema.optional(Schema.String),
+  meta: Schema.Any,
+  payload: Schema.Any,
+});
 
-export interface RunFilters {
+export type ExecutionRecord = Schema.Schema.Type<typeof ExecutionRecordSchema>;
+
+export const ExecutionDocument = document('system_executions', ExecutionRecordSchema);
+export const executionSchema = dbschema(ExecutionDocument);
+
+export interface ExecutionFilters {
   readonly limit: number;
   readonly offset: number;
   readonly status?: string | null;
   readonly type?: string | null;
+  readonly moduleId?: string | null;
 }
 
-export class WorkflowTracker extends Context.Tag("WorkflowTracker")<
-  WorkflowTracker,
-  {
-    readonly start: (triggerType: string, meta: any, payload: any) => Effect.Effect<string>;
-    readonly complete: (id: string) => Effect.Effect<void>;
-    readonly fail: (id: string, error: unknown) => Effect.Effect<void>;
-    readonly getRuns: (filters: RunFilters) => Effect.Effect<WorkflowRun[]>;
-    readonly countRuns: (filters: Omit<RunFilters, "limit" | "offset">) => Effect.Effect<number>;
-  }
->() { }
+// Sanitizes internal errors: strips file paths, stack traces, and internal frame dumps
+const sanitizeErrorMessage = (error: unknown): string => {
+  if (!error) return 'Execution failed';
+  const rawMsg =
+    typeof error === 'object' && error !== null && 'message' in error && typeof (error as any).message === 'string'
+      ? (error as any).message
+      : error instanceof Error
+        ? error.message
+        : String(error);
 
-export const WorkflowTrackerLive = Layer.effect(
-  WorkflowTracker,
-  Effect.gen(function*() {
-    const sql = yield* SqlClient.SqlClient
-    const brokerInstance = yield* MessageBroker
+  const firstLine = (rawMsg.split('\n')[0] ?? 'Execution failed').trim();
+  return firstLine.replace(/at\s+.*$/g, '').trim() || 'Execution failed';
+};
 
-    yield* sql`
-      CREATE TABLE IF NOT EXISTS system_workflow_runs (
-        id VARCHAR(255) PRIMARY KEY,
-        trigger_type VARCHAR(255) NOT NULL,
-        status VARCHAR(50) NOT NULL,
-        start_time BIGINT NOT NULL,
-        end_time BIGINT,
-        error TEXT,
-        meta JSONB,
-        payload JSONB
-      )
-    `.pipe(Effect.orDie)
+export class ExecutionTracker extends Effect.Service<ExecutionTracker>()('ExecutionTracker', {
+  effect: Effect.gen(function*() {
+    const brokerInstance = yield* MessageBroker;
+    const db = yield* executionSchema.asEffect();
 
-    const sendWorkflowEvent = (event: BrokerPayload<typeof SystemWorkflowBroker>) =>
-      SystemWorkflowBroker.publish(event).pipe(
+    const buildWhere = (f: Omit<ExecutionFilters, 'limit' | 'offset'>) => {
+      const clause: Record<string, any> = {};
+      if (f.status) clause.status = f.status;
+      if (f.moduleId) clause.moduleId = f.moduleId;
+      if (f.type) clause.triggerType = f.type;
+      return clause;
+    };
+
+    const sendExecutionEvent = (event: BrokerPayload<typeof SystemExecutionBroker>) =>
+      SystemExecutionBroker.publish(event).pipe(
         Effect.provideService(MessageBroker, brokerInstance),
-        Effect.orDie
-      )
+        Effect.orDie,
+      );
 
     return {
-      start: (triggerType, meta, payload) => Effect.gen(function*() {
-        if (triggerType.startsWith("system-")) return `internal_${crypto.randomUUID()}`
+      start: (args: {
+        moduleId: string;
+        triggerType: string;
+        triggerName?: string;
+        meta: any;
+        payload: any;
+      }): Effect.Effect<string> =>
+        Effect.gen(function*() {
+          // Prevent infinite loops from internal system triggers
+          if (args.triggerType.startsWith('system-') || args.moduleId === 'internal') {
+            return `internal_${crypto.randomUUID()}`;
+          }
+          const id = crypto.randomUUID();
+          const timestamp = Date.now();
 
-        const id = crypto.randomUUID()
+          // 1. Direct write to SurrealDB
+          yield* db
+            .doc('system_executions')
+            .create({
+              id,
+              moduleId: args.moduleId,
+              triggerType: args.triggerType,
+              triggerName: args.triggerName,
+              status: 'running',
+              startTime: timestamp,
+              meta: args.meta,
+              payload: args.payload,
+            })
+            .toEffect()
+            .pipe(
+              Effect.catchAllCause((cause) =>
+                Effect.logError('[ExecutionTracker] Failed to insert execution start', cause),
+              ),
+            );
 
-        yield* sendWorkflowEvent({
-          action: "start",
-          id,
-          triggerType,
-          meta,
-          payload,
-          timestamp: Date.now()
-        })
-        return id
-      }),
-      complete: (id) => Effect.gen(function*() {
-        if (id.startsWith("internal_")) return
-        yield* sendWorkflowEvent({ action: "complete", id, timestamp: Date.now() })
-      }),
-      fail: (id, error) => Effect.gen(function*() {
-        if (id.startsWith("internal_")) return
-        yield* sendWorkflowEvent({ action: "fail", id, error: String(error), timestamp: Date.now() })
-      }),
-      getRuns: (filters) => Effect.gen(function*() {
-        let query = sql`SELECT * FROM system_workflow_runs WHERE 1=1`
-        if (filters.status) query = sql`${query} AND status = ${filters.status}`
-        if (filters.type) query = sql`${query} AND trigger_type = ${filters.type}`
-        query = sql`${query} ORDER BY start_time DESC LIMIT ${filters.limit} OFFSET ${filters.offset}`
-        const rows = yield* query.pipe(Effect.orDie)
-        return rows.map((r: any) => ({
-          id: r.id, triggerType: r.trigger_type, status: r.status,
-          startTime: Number(r.start_time), endTime: r.end_time ? Number(r.end_time) : undefined,
-          error: r.error ?? undefined,
-          meta: r.meta, payload: r.payload
-        }))
-      }),
-      countRuns: (filters) => Effect.gen(function*() {
-        let query = sql`SELECT COUNT(*) as count FROM system_workflow_runs WHERE 1=1`
-        if (filters.status) query = sql`${query} AND status = ${filters.status}`
-        if (filters.type) query = sql`${query} AND trigger_type = ${filters.type}`
-        const rows = yield* query.pipe(Effect.orDie)
-        return Number((rows[0] as any)?.count || 0)
-      })
-    }
-  })
-)
+          // 2. Publish to broker
+          yield* sendExecutionEvent({
+            action: 'start',
+            id,
+            moduleId: args.moduleId,
+            triggerType: args.triggerType,
+            triggerName: args.triggerName,
+            meta: args.meta,
+            payload: args.payload,
+            timestamp,
+          });
+
+          return id;
+        }),
+
+      complete: (id: string): Effect.Effect<void> =>
+        Effect.gen(function*() {
+          if (id.startsWith('internal_')) return;
+          const timestamp = Date.now();
+
+          // 1. Direct update in SurrealDB
+          yield* db
+            .doc(surrealId('system_executions', id))
+            .update()
+            .merge({
+              status: 'completed',
+              endTime: timestamp,
+            })
+            .toEffect()
+            .pipe(
+              Effect.catchAllCause((cause) =>
+                Effect.logError('[ExecutionTracker] Failed to update execution complete', cause),
+              ),
+            );
+
+          // 2. Publish to broker
+          yield* sendExecutionEvent({ action: 'complete', id, timestamp });
+        }),
+
+      fail: (id: string, error: unknown): Effect.Effect<void> =>
+        Effect.gen(function*() {
+          if (id.startsWith('internal_')) return;
+          const timestamp = Date.now();
+          const safeError = sanitizeErrorMessage(error);
+
+          // 1. Direct update in SurrealDB with sanitized error string
+          yield* db
+            .doc(surrealId('system_executions', id))
+            .update()
+            .merge({
+              status: 'failed',
+              endTime: timestamp,
+              error: safeError,
+            })
+            .toEffect()
+            .pipe(
+              Effect.catchAllCause((cause) =>
+                Effect.logError('[ExecutionTracker] Failed to update execution fail', cause),
+              ),
+            );
+
+          // 2. Publish clean failure event to broker
+          yield* sendExecutionEvent({ action: 'fail', id, error: safeError, timestamp });
+        }),
+
+      getExecutions: (filters: ExecutionFilters): Effect.Effect<readonly ExecutionRecord[], Error> =>
+        Effect.suspend(() => {
+          const query = db.doc('system_executions').select();
+
+          const whereClause = buildWhere(filters);
+          if (Object.keys(whereClause).length > 0) {
+            query.where(whereClause);
+          }
+
+          return query
+            .limit(filters.limit)
+            .start(filters.offset)
+            .orderBy({ field: 'startTime', direction: 'DESC' })
+            .toEffect()
+            .pipe(Effect.catchAll(() => Effect.succeed([] as readonly ExecutionRecord[])));
+        }),
+
+      countExecutions: (filters: Omit<ExecutionFilters, 'limit' | 'offset'>): Effect.Effect<number, Error> =>
+        Effect.suspend(() => {
+          const query = db.doc('system_executions').select();
+
+          const whereClause = buildWhere(filters);
+          if (Object.keys(whereClause).length > 0) {
+            query.where(whereClause);
+          }
+
+          return query
+            .toEffect()
+            .pipe(
+              Effect.map((records) => records.length),
+              Effect.catchAll(() => Effect.succeed(0)),
+            );
+        }),
+
+      subscribeExecutions: () => db.doc('system_executions').select().live(),
+
+      subscribeEvents: () =>
+        SystemExecutionBroker.subscribe().pipe(
+          Stream.provideService(MessageBroker, brokerInstance),
+        ),
+    };
+  }),
+}) {}

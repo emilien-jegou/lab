@@ -1,36 +1,29 @@
 import { FileSystem } from "@effect/platform"
 import type { PlatformError } from "@effect/platform/Error"
-import { Effect, Schema, Stream, Queue } from "effect"
-import { Trigger } from "./base"
+import { Effect, Schema, Stream } from "effect"
+import * as Base from "./base"
 
-export class WatchTrigger<I> extends Trigger<I, PlatformError, FileSystem.FileSystem> {
-  readonly _tag = "Watch"
-
-  constructor(
-    readonly path: string,
-    readonly payloadSchema: Schema.Schema<I, any, any> = Schema.Any as any
-  ) {
-    super()
-  }
-
-  get meta() {
-    return { path: this.path }
-  }
-
-  schema<NewI>(newSchema: Schema.Schema<NewI, any, any>): WatchTrigger<NewI> {
-    return new WatchTrigger(this.path, newSchema)
-  }
-
-  protected load(queue: Queue.Queue<unknown>) {
-    return Effect.gen(this, function*() {
-      const fs = yield* FileSystem.FileSystem
-      const stream = fs.watch(this.path)
-
-      yield* Stream.runForEach(stream, (event) =>
-        queue.offer(event).pipe(Effect.catchAllCause(() => Effect.void))
-      )
-    })
-  }
+export interface WatchTriggerDef<I> extends Base.Trigger<I, PlatformError, FileSystem.FileSystem> {
+  readonly schema: <NewI>(newSchema: Schema.Schema<NewI, any, any>) => WatchTriggerDef<NewI>
 }
 
-export const watch = (path: string) => new WatchTrigger(path)
+export const watch = <I = unknown>(
+  path: string,
+  payloadSchema: Schema.Schema<I, any, any> = Schema.Any as any
+): WatchTriggerDef<I> => {
+  const producer = Effect.gen(function*() {
+    const fs = yield* FileSystem.FileSystem
+    const queue = yield* Base.TriggerQueue // Standard yielded queue service
+
+    const stream = fs.watch(path)
+
+    yield* Stream.runForEach(stream, (event) =>
+      queue.offer(event).pipe(Effect.catchAllCause(() => Effect.void))
+    )
+  })
+
+  return {
+    ...Base.make("Watch", { path }, payloadSchema, producer),
+    schema: (newSchema) => watch(path, newSchema)
+  }
+}

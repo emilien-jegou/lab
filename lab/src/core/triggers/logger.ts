@@ -1,7 +1,7 @@
-import { Schema, Stream, Queue, Effect } from "effect"
-import { Trigger } from "./base"
+import { Schema, Stream, Effect } from "effect"
+import * as Base from "./base"
 import { MessageBroker } from "../system/broker"
-import { type LogEvent } from "../system/logger"
+import type { LogEvent } from "../system/logger" // Add "type" if it's purely a type
 
 const LogEventSchema = Schema.Struct({
   level: Schema.String,
@@ -10,18 +10,19 @@ const LogEventSchema = Schema.Struct({
   annotations: Schema.Record({ key: Schema.String, value: Schema.Unknown })
 })
 
-export class LoggerTrigger extends Trigger<LogEvent, never, MessageBroker> {
-  readonly _tag = "Logger"
-  readonly meta = { topic: "system:logs" }
-  readonly payloadSchema = LogEventSchema as any
+export const logger = (): Base.Trigger<LogEvent, never, MessageBroker> => {
+  const producer = Effect.gen(function*() {
+    const broker = yield* MessageBroker
+    const queue = yield* Base.TriggerQueue // Yielded queue service
 
-  protected load(queue: Queue.Queue<unknown>) {
-    return Effect.gen(function*() {
-      const broker = yield* MessageBroker
-      const stream = broker.subscribe("system:logs")
-      yield* Stream.runForEach(stream, (raw) => queue.offer(raw))
-    })
-  }
+    const stream = broker.subscribe("system:logs")
+    yield* Stream.runForEach(stream, (raw) => queue.offer(raw))
+  })
+
+  return Base.make(
+    "Logger",
+    { topic: "system:logs" },
+    LogEventSchema as any,
+    producer
+  )
 }
-
-export const logger = () => new LoggerTrigger();

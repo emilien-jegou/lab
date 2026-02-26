@@ -2,13 +2,15 @@
 
 !LICENSE
 !README.md
+!compose.yml
+!devenv.nix
+!secretspec.toml
+!.envrc
+
 !conf/
 !conf/**
 !env.example/
 !env.example/**
-!compose.yml
-!shell.nix
-!.envrc
 
 # orchestrator
 !lab/

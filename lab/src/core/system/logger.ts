@@ -1,69 +1,68 @@
-import { Effect, Layer, Logger, HashMap, Queue, Console } from "effect"
-import { logger } from "../triggers/logger"
-import { MessageBroker } from "./broker"
-import { defineModule } from "./module";
+// lab/src/core/system/logger.ts
+import { Effect, Layer, Logger, HashMap, Queue, Console, Option, List } from "effect";
+import { VectorConfig } from "../../config/vector";
 
 export interface LogEvent {
   readonly level: string;
   readonly message: string;
-  readonly timestamp: Date;
+  readonly timestamp: number;
   readonly annotations: Record<string, unknown>;
+  readonly trace_id?: string;
+  readonly span_id?: string;
 }
 
-const logBuffer = Effect.runSync(Queue.unbounded<LogEvent>())
+const logBuffer = Effect.runSync(Queue.unbounded<LogEvent>());
 
-export const FrameworkLogger = Logger.make(({ logLevel, message, annotations, date }) => {
-  const messageStr = Array.isArray(message) ? message.join(" ") : String(message)
-  const annos: Record<string, unknown> = {}
-  HashMap.forEach(annotations, (value, key) => { annos[String(key)] = value })
+export const FrameworkLogger = Logger.make(({ logLevel, message, annotations, date, spans }) => {
+  const annos: Record<string, unknown> = {};
+  HashMap.forEach(annotations, (value, key) => { annos[String(key)] = value; });
+
+  if (annos.moduleId === "internal" || annos.triggerType === "Logger") {
+    return;
+  }
+
+  const currentSpan = Option.getOrUndefined(List.head(spans)) as
+    | { traceId?: string; spanId?: string }
+    | undefined;
 
   logBuffer.unsafeOffer({
-    level: logLevel.label,
-    message: messageStr,
-    timestamp: date,
-    annotations: annos
-  })
-})
+    level: logLevel.label.toLowerCase(),
+    message: Array.isArray(message) ? message.join(" ") : String(message),
+    timestamp: date.getTime(),
+    annotations: annos,
+    ...(currentSpan?.traceId ? { trace_id: currentSpan.traceId } : {}),
+    ...(currentSpan?.spanId ? { span_id: currentSpan.spanId } : {}),
+  });
+});
 
-export const LogIngressLive = Layer.effectDiscard(
+export const VectorLogForwarderLive = Layer.effectDiscard(
   Effect.gen(function*() {
-    const broker = yield* MessageBroker
+    const config = yield* VectorConfig;
 
-    const worker = Effect.gen(function*() {
-      while (true) {
-        const event = yield* Queue.take(logBuffer)
-        yield* broker.publish("system:logs", event).pipe(
-          Effect.catchAllCause((c) =>
-            Effect.sync(() => Console.error("[LogIngress] Broker publish failed", c))
-          )
-        )
-      }
-    })
+    const flushLogs = Effect.gen(function*() {
+      const first = yield* Queue.take(logBuffer);
+      const rest = yield* Queue.takeBetween(logBuffer, 0, 99);
+      const batch = [first, ...rest];
 
-    yield* Effect.forkDaemon(worker)
-  })
-)
+      // Format as NDJSON (Newline Delimited JSON) for Vector HTTP source
+      const ndjsonBody = batch.map((evt) => JSON.stringify(evt)).join("\n");
 
-export const LokiLogAggregatorLive = defineModule(
-  "internal",
-  logger().bind((evt) =>
-    Effect.gen(function*() {
-      const lokiUrl = process.env.LOKI_URL || "http://localhost:3100"
-      yield* Effect.tryPromise({
-        try: () => fetch(`${lokiUrl}/loki/api/v1/push`, {
+      yield* Effect.tryPromise(async () => {
+        const res = await fetch(config.ingestUrl, {
           method: "POST",
-          headers: { "Content-Type": "application/json" },
-          body: JSON.stringify({
-            streams: [{
-              stream: { app: "lab", level: evt.level.toLowerCase() },
-              values: [[(evt.timestamp.getTime() * 1000000).toString(), evt.message]]
-            }]
-          })
-        }),
-        catch: () => new Error("Loki Push Failed")
-      })
-    }).pipe(
-      Effect.catchAllCause((c) => Effect.logError("Loki push failed", c))
-    )
-  )
-)
+          headers: { "Content-Type": "application/x-ndjson" },
+          body: ndjsonBody,
+        });
+        if (!res.ok) {
+          throw new Error(`Vector returned HTTP ${res.status}`);
+        }
+      }).pipe(
+        Effect.catchAll((err) =>
+          Effect.sync(() => Console.error("[VectorLogForwarder] Flush failed:", err.message))
+        )
+      );
+    });
+
+    yield* Effect.forkDaemon(Effect.forever(flushLogs));
+  })
+);

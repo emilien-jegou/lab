@@ -1,50 +1,46 @@
-import { Effect, Schedule, Ref, Schema, Queue } from "effect"
-import { Trigger } from "./base"
+import { Effect, Schedule, Ref, Schema } from 'effect';
 
-export class PollingTrigger<State, I, FetchE, FetchR> extends Trigger<I, FetchE, FetchR> {
-  readonly _tag = "Polling"
+import * as Base from './base';
 
-  constructor(
-    readonly id: string,
-    readonly schedule: Schedule.Schedule<any, any, any>,
-    readonly initialState: State,
-    readonly fetcher: (state: State) => Effect.Effect<{ newState: State; items: I[] }, FetchE, FetchR>,
-    readonly payloadSchema: Schema.Schema<I, any, any> = Schema.Any as any
-  ) {
-    super()
-  }
-
-  get meta() {
-    return { id: this.id }
-  }
-
-  schema<NewI>(newSchema: Schema.Schema<NewI, any, any>): PollingTrigger<State, NewI, FetchE, FetchR> {
-    return new PollingTrigger(this.id, this.schedule, this.initialState, this.fetcher as any, newSchema)
-  }
-
-  protected load(queue: Queue.Queue<unknown>) {
-    return Effect.gen(this, function*() {
-      const stateRef = yield* Ref.make(this.initialState)
-
-      yield* Effect.repeat(Effect.gen(this, function*() {
-        const state = yield* Ref.get(stateRef)
-        const { newState, items } = yield* this.fetcher(state)
-
-        for (const item of items) {
-          yield* queue.offer(item)
-        }
-
-        yield* Ref.set(stateRef, newState)
-      }), this.schedule).pipe(
-        Effect.forkScoped
-      )
-    })
-  }
+export interface PollingTriggerDef<State, I, FetchE, FetchR> extends Base.Trigger<
+  I,
+  FetchE,
+  FetchR
+> {
+  readonly schema: <NewI>(
+    newSchema: Schema.Schema<NewI, any, any>,
+  ) => PollingTriggerDef<State, NewI, FetchE, FetchR>;
 }
 
-export const polling = <State, I, FetchE, FetchR>(
+export const polling = <State, I = unknown, FetchE = never, FetchR = never>(
   id: string,
   schedule: Schedule.Schedule<any, any, any>,
   initialState: State,
-  fetcher: (state: State) => Effect.Effect<{ newState: State; items: I[] }, FetchE, FetchR>
-) => new PollingTrigger(id, schedule, initialState, fetcher)
+  fetcher: (state: State) => Effect.Effect<{ newState: State; items: I[] }, FetchE, FetchR>,
+  payloadSchema: Schema.Schema<I, any, any> = Schema.Any as any,
+): PollingTriggerDef<State, I, FetchE, FetchR> => {
+  const producer = Effect.gen(function*() {
+    const queue = yield* Base.TriggerQueue;
+    const stateRef = yield* Ref.make(initialState);
+
+    yield* Effect.repeat(
+      Effect.gen(function*() {
+        const state = yield* Ref.get(stateRef);
+        const { newState, items } = yield* fetcher(state);
+
+        for (const item of items) {
+          yield* queue.offer(item);
+        }
+
+        yield* Ref.set(stateRef, newState);
+      }),
+      schedule,
+    ).pipe(Effect.forkScoped);
+  });
+
+  return {
+    ...Base.make('Polling', { id }, payloadSchema, producer),
+    // Re-added `as any` so TypeScript infers `I` purely from the newSchema type
+    schema: (newSchema) => polling(id, schedule, initialState, fetcher as any, newSchema),
+  };
+};

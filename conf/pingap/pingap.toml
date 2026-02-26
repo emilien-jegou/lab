@@ -1,0 +1,88 @@
+[upstreams.kanidm]
+addrs = ["kanidm:8443"]
+discovery = "dns"
+update_frequency = "10s"
+sni = "idm.localhost"
+verify_cert = false
+
+# ==========================================
+# UPSTREAMS (Docker DNS discovery)
+# ==========================================
+[upstreams.lab]
+addrs = ["lab:3000"]
+discovery = "dns"
+update_frequency = "10s"
+
+[upstreams.surrealist]
+addrs = ["surrealist:8080"]
+discovery = "dns"
+update_frequency = "10s"
+
+[upstreams.openobserve]
+addrs = ["openobserve:5080"]
+discovery = "dns"
+update_frequency = "10s"
+
+[upstreams.oxicloud]
+addrs = ["oxicloud:8086"]
+discovery = "dns"
+update_frequency = "10s"
+
+[upstreams.imgproxy]
+addrs = ["imgproxy:8080"]
+discovery = "dns"
+update_frequency = "10s"
+
+# ==========================================
+# LOCATIONS (Virtual Hosts)
+# ==========================================
+[locations.lab_loc]
+upstream = "lab"
+host = "lab.localhost,lab.localhost:8000"
+path = "/"
+
+[locations.surrealist_loc]
+upstream = "surrealist"
+host = "surrealist.localhost,surrealist.localhost:8000"
+path = "/"
+
+[locations.openobserve_loc]
+upstream = "openobserve"
+host = "openobserve.localhost,openobserve.localhost:8000"
+path = "/"
+
+[locations.oxicloud_loc]
+upstream = "oxicloud"
+host = "oxicloud.localhost,oxicloud.localhost:8000"
+path = "/"
+
+[locations.imgproxy_loc]
+upstream = "imgproxy"
+host = "imgproxy.localhost,imgproxy.localhost:8000"
+path = "/"
+
+# Default fallback
+[locations.default_loc]
+upstream = "openobserve"
+path = "/"
+
+[locations.kanidm_loc]
+upstream = "kanidm"
+host = "idm.localhost,idm.localhost:8000"
+path = "/"
+
+
+# ==========================================
+# SERVER PORTAL
+# ==========================================
+[servers.portal]
+addr = "0.0.0.0:80"
+locations = [
+  "kanidm_loc",
+  "lab_loc",
+  "surrealist_loc",
+  "openobserve_loc",
+  "oxicloud_loc",
+  "imgproxy_loc",
+  "default_loc",
+]

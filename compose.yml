@@ -1,473 +1,308 @@
 services:
-  db:
-    image: pgvector/pgvector:pg15
-    container_name: db
-    env_file:
-      - env/db.env
-      - env/db.lab.env
-    healthcheck:
-      interval: 30s
-      retries: 5
-      start_period: 20s
-      test: ["CMD-SHELL", "pg_isready -d $${POSTGRES_DB} -U $${POSTGRES_USER}"]
-      timeout: 5s
-    restart: unless-stopped
+  # ============================================================================
+  # 1. TLS Cert Generator (Runs once in 0.1s, exits 0)
+  # ============================================================================
+  kanidm-certs:
+    image: docker.io/alpine/openssl:latest
+    container_name: kanidm-certs
+    restart: "no"
     volumes:
-      - ./__internal/postgres:/var/lib/postgresql/data
-      - ./conf/postgres/initdb.d:/docker-entrypoint-initdb.d
+      - ./__internal/kanidm/certs:/certs:z
+    entrypoint: ["/bin/sh", "-c"]
+    command:
+      - |
+        if [ ! -f /certs/chain.pem ]; then
+          echo "Generating internal self-signed certs..."
+          openssl req -x509 -newkey rsa:2048 -nodes \
+            -keyout /certs/key.pem \
+            -out /certs/chain.pem \
+            -days 3650 -subj "/CN=idm.localhost"
+        fi
+
+  kanidm:
+    image: docker.io/kanidm/server:latest
+    container_name: kanidm
+    restart: unless-stopped
+    command: ["kanidmd", "server", "-c", "/etc/kanidm/server.toml"] # <-- FULL BINARY CALL
+    env_file:
+      - env/kanidm.env
+    depends_on:
+      kanidm-certs:
+        condition: service_completed_successfully
+    volumes:
+      - ./conf/kanidm/server.toml:/etc/kanidm/server.toml:ro,z
+      - ./__internal/kanidm/certs:/certs:ro,z
+      - ./__internal/kanidm/data:/data:z
+    expose:
+      - 8443
+    healthcheck:
+      test: ["CMD", "/usr/bin/kanidm", "ping", "-H", "https://127.0.0.1:8443", "-k"]
+      interval: 10s
+      timeout: 5s
+      retries: 3
+      start_period: 5s
     deploy:
       resources:
         limits:
-          memory: 2G
+          memory: 512M
         reservations:
           memory: 128M
 
+  pingora-portal:
+    image: docker.io/vicanso/pingap:latest
+    container_name: pingora-portal
+    restart: unless-stopped
+    ports:
+      - "8000:80"     # Main Unified Portal
+      - "3018:3018"   # Pingora Web Admin UI
+    command: >
+      pingap -c /etc/pingap/conf
+      --autoreload
+      --admin=cGluZ2FwOjEyMzEyMw==@0.0.0.0:3018
+    volumes:
+      - ./conf/pingap:/etc/pingap/conf:ro,z
+      - ./__internal/pingap:/opt/pingap:z
+    depends_on:
+      - lab
+      - surrealist
+      - openobserve
+      - oxicloud
+      - imgproxy
+      - kanidm
+
   lab:
-    image: oven/bun:latest
+    image: docker.io/oven/bun:latest
     container_name: lab
     working_dir: /app
     env_file:
       - env/lab.env
       - env/db.lab.env
     depends_on:
-      db:
-        condition: service_healthy
-      loki:
+      openobserve:
         condition: service_started
-      walrus:
+      vector:
+        condition: service_started
+      surrealdb:
+        condition: service_started
+      iggy:
+        condition: service_started
+      valkey:
+        condition: service_started
+      garage:
+        condition: service_started
+      imgproxy:
+        condition: service_started
+      oxicloud:
         condition: service_started
     ports:
       - "6605:3000"
     expose:
       - 3000
     volumes:
-      - ./lab/:/app
+      - ./lab/:/app:z
+      - ./data/:/data:z
     command: bash -c "bun run dev"
     restart: always
-    environment:
-      - NODE_ENV=development
-      - FORCE_COLOR=1
-      - LOKI_URL=http://loki:3100
-      - WALRUS_URL=tcp://walrus:9091
     deploy:
       resources:
         limits:
-          memory: 1G
+          memory: 512M
         reservations:
           memory: 256M
 
-  walrus:
-    build:
-      dockerfile: ./distributed-walrus/Dockerfile
-      context: ./walrus
-    image: localhost/lab_walrus:latest
-    container_name: walrus
-    stop_grace_period: 1m
-    hostname: walrus
-    command:
-      - "--node-id"
-      - "1"
-      - "--data-dir"
-      - "/data"
-      - "--raft-host"
-      - "0.0.0.0"
-      - "--raft-advertise-host"
-      - "walrus"
-      - "--raft-port"
-      - "6001"
-      - "--client-host"
-      - "0.0.0.0"
-      - "--client-port"
-      - "9091"
-    environment:
-      - RUST_LOG=info
-      - WALRUS_DISABLE_IO_URING=1
-      - WALRUS_MONITOR_CHECK_MS=1000
-      - WALRUS_MAX_SEGMENT_BYTES=10000000
-      - WALRUS_RETENTION_GENERATIONS=0
-      - WALRUS_RPC_TIMEOUT_MS=4000
-    # Privileged is required for certain IO operations in the Rust image
-    privileged: true 
+  iggy:
+    image: apache/iggy:0.9.0-edge.8
+    container_name: iggy
+    cap_add:
+      - SYS_NICE
     security_opt:
       - seccomp:unconfined
+    ulimits:
+      memlock:
+        soft: -1
+        hard: -1
+    env_file:
+      - env/iggy.env
     ports:
-      - "9091:9091" # Client Port
-      - "6001:6001" # Raft Port
+      - "6606:3000"
+      - "8090:8090"
     volumes:
-      - ./__internal/walrus:/data
-    networks:
-      - default
+      - ./__internal/iggy:/app/local_data:z
+    restart: unless-stopped
+    healthcheck:
+      test: ["CMD-SHELL", "bash -c 'cat < /dev/null > /dev/tcp/127.0.0.1/3000' || exit 1"]
+      interval: 10s
+      timeout: 3s
+      retries: 5
+      start_period: 5s
+
+  openobserve:
+    image: public.ecr.aws/zinclabs/openobserve:latest
+    container_name: openobserve
+    env_file:
+      - env/openobserve.env
+    expose:
+      - 5080
+    volumes:
+      - ./__internal/openobserve:/data:z
+    restart: unless-stopped
+    deploy:
+      resources:
+        limits:
+          memory: 800M
+        reservations:
+          memory: 256M
+
+  vector:
+    image: docker.io/timberio/vector:nightly-alpine
+    container_name: vector
+    ports:
+      - "8686:8686"
+      - "8688:8688"
+      - "4317:4317"
+      - "4318:4318"
+    env_file:
+      - env/vector.env
+    volumes:
+      - ./conf/vector/vector.yaml:/etc/vector/vector.yaml:ro,z
+      - ./__internal/vector:/var/lib/vector:z
+    command: ["--config", "/etc/vector/vector.yaml"]
 
   valkey:
-    image: valkey/valkey-bundle:latest
+    image: docker.io/valkey/valkey-bundle:latest
     container_name: valkey
-    env_file: env/valkey.env
+    env_file:
+      - env/valkey.env
+    ports:
+      - "6379:6379"
+    restart: unless-stopped
+    volumes:
+      - ./__internal/valkey:/data:z
+    command: >
+      sh -c "valkey-server
+      --requirepass $$VALKEY_PASSWORD
+      --maxmemory 150mb
+      --maxmemory-policy allkeys-lru"
+    deploy:
+      resources:
+        limits:
+          memory: 200M
+        reservations:
+          memory: 32M
     healthcheck:
       test: ["CMD-SHELL", "valkey-cli -a $$VALKEY_PASSWORD ping | grep PONG"]
       interval: 30s
       timeout: 3s
       retries: 5
-      start_period: 20s
-    ports:
-      - "6379:6379"
-    restart: unless-stopped
-    volumes:
-      # CHANGED: Data -> ./__internal/valkey
-      - ./__internal/valkey:/data
-    command: ["sh", "-c", "valkey-server --requirepass $$VALKEY_PASSWORD"]
-    deploy:
-      resources:
-        limits:
-          memory: 1G
-        reservations:
-          memory: 32M
-
-  loki:
-    image: grafana/loki:latest
-    container_name: loki
-    ports:
-      - "3100:3100"
-    command: -config.file=/etc/loki/local-config.yaml
-    restart: unless-stopped
-    deploy:
-      resources:
-        limits:
-          memory: 512M
-
-  nocodb:
-    image: "nocodb/nocodb:latest"
-    container_name: nocodb
-    env_file:
-      - env/db.env
-      - env/minio.env
-    environment:
-      NC_STORAGE_ADAPTER: s3
-      NC_S3_ENDPOINT: http://minio:9000
-      NC_S3_BUCKET: nocodb
-      NC_S3_ACCESS_KEY_ID: ${MINIO_ROOT_USER}
-      NC_S3_SECRET_ACCESS_KEY: ${MINIO_ROOT_PASSWORD}
-      NC_S3_FORCE_PATH_STYLE: "true"
-    ports:
-      - "6601:8080"
-    volumes:
-      - ./__internal/nocodb:/usr/app/data
-    depends_on:
-      db:
-        condition: service_healthy
-      minio:
-        condition: service_healthy
-    restart: always
-    deploy:
-      resources:
-        limits:
-          memory: 2G
-        reservations:
-          memory: 256M
-
-  minio:
-    image: minio/minio:latest
-    container_name: minio
-    env_file:
-      - env/minio.env
-    ports:
-      - "9000:9000"
-      - "6602:9001"
-    volumes:
-      # CHANGED: Data -> ./__internal/minio
-      - ./__internal/minio:/data
-    command: server./__internal --console-address ":9001"
-    healthcheck:
-      test: ["CMD", "curl", "-f", "http://localhost:9000/minio/health/live"]
-      interval: 30s
-      timeout: 20s
-      retries: 3
-    restart: unless-stopped
-    deploy:
-      resources:
-        limits:
-          memory: 768M
-        reservations:
-          memory: 128M
-
-  create-minio-bucket:
-    image: minio/mc
-    depends_on:
-      - minio
-    env_file:
-      - env/minio.env
-    entrypoint: >
-      /bin/sh -c "
-      /usr/bin/mc alias set myminio http://minio:9000 $$MINIO_ROOT_USER $$MINIO_ROOT_PASSWORD;
-      /usr/bin/mc mb myminio/nocodb --ignore-existing;
-      "
-    restart: "no"
-    deploy:
-      resources:
-        limits:
-          memory: 128M
-          cpus: '0.5'
-
-  searxng:
-    image: searxng/searxng:latest
-    container_name: searxng
-    env_file:
-      - env/searxng.env
-      - env/valkey.env
-    cap_add:
-      - CHOWN
-      - SETGID
-      - SETUID
-      - DAC_OVERRIDE
-    cap_drop:
-      - ALL
-    depends_on:
-      valkey:
-        condition: service_healthy
-    healthcheck:
-      interval: 30s
-      retries: 5
-      start_period: 10s
-      test: curl --fail http://localhost:8888/ || exit 1
-      timeout: 3s
-    ports:
-      - "6604:8080"
-    logging:
-      driver: "json-file"
-      options:
-        max-size: "1m"
-        max-file: "1"
-    restart: unless-stopped
-    entrypoint: /usr/local/bin/entrypoint.sh
-    volumes:
-      - ./conf/searxng/settings.template.yml:/etc/searxng/settings.template.yml:ro
-      - ./conf/searxng/entrypoint.sh:/usr/local/bin/entrypoint.sh:ro
-      - ./conf/searxng/uwsgi.ini:/etc/searxng/uwsgi.ini:ro
-    deploy:
-      resources:
-        limits:
-          memory: 512M
-          cpus: '1.0'
-        reservations:
-          memory: 128M
-
-  tika:
-    image: apache/tika:latest-full
-    container_name: tika
-    env_file: env/tika.env
-    healthcheck:
-      interval: 30s
-      retries: 5
       start_period: 5s
-      test: curl --fail http://localhost:9998/tika || exit 1
-      timeout: 5s
-    ports:
-      - "9998:9998"
-    restart: unless-stopped
-    deploy:
-      resources:
-        limits:
-          memory: 2G
-        reservations:
-          memory: 512M
 
-  crawl4ai:
-    image: unclecode/crawl4ai:latest
-    container_name: crawl4ai
-    ports:
-      - "6603:11235"
-    shm_size: "1g"
-    env_file: env/crawl4ai.env
-    volumes:
-      - /dev/shm:/dev/shm
-    deploy:
-      resources:
-        limits:
-          memory: 4G
-    restart: unless-stopped
-    healthcheck:
-      test: ["CMD", "curl", "-f", "http://localhost:11235/health"]
-      interval: 30s
-      timeout: 10s
-      retries: 3
-      start_period: 40s
-    user: "appuser"
-
-  zookeeper:
-    image: signoz/zookeeper:3.7.1
-    container_name: signoz-zookeeper
-    restart: unless-stopped
-    volumes:
-      - ./__internal/zookeeper:/bitnami/zookeeper:Z
-    environment:
-      - ZOO_SERVER_ID=1
-      - ALLOW_ANONYMOUS_LOGIN=yes
-      - ZOO_AUTOPURGE_INTERVAL=1
-    healthcheck:
-      test: echo srvr | nc localhost 2181
-      interval: 30s
-      timeout: 5s
-      retries: 3
-    deploy:
-      resources:
-        limits:
-          memory: 512M
-        reservations:
-          memory: 128M
-
-  init-clickhouse:
-    image: clickhouse/clickhouse-server:25.5.6
-    container_name: signoz-init-clickhouse
-    command:
-      - bash
-      - -c
-      - |
-        version="v0.0.1"
-        node_os=$$(uname -s | tr '[:upper:]' '[:lower:]')
-        node_arch=$$(uname -m | sed s/aarch64/arm64/ | sed s/x86_64/amd64/)
-        echo "Fetching histogram-binary for $${node_os}/$${node_arch}"
-        cd /tmp
-        wget -O histogram-quantile.tar.gz "https://github.com/SigNoz/signoz/releases/download/histogram-quantile%2F$${version}/histogram-quantile_$${node_os}_$${node_arch}.tar.gz"
-        tar -xvzf histogram-quantile.tar.gz
-        mv histogram-quantile /var/lib/clickhouse/user_scripts/histogramQuantile
-    restart: on-failure
-    volumes:
-      - ./conf/signoz/clickhouse/user_scripts:/var/lib/clickhouse/user_scripts/
-
-  clickhouse:
-    image: clickhouse/clickhouse-server:25.5.6
-    container_name: signoz-clickhouse
-    hostname: clickhouse
-    restart: unless-stopped
+  surrealist:
+    container_name: "surrealist"
+    image: docker.io/surrealdb/surrealist:latest
+    expose:
+      - 8080
+    restart: always
     depends_on:
-      init-clickhouse:
-        condition: service_completed_successfully
-      zookeeper:
-        condition: service_healthy
-    ports:
-      - "6606:8123"
-      - "9000:9000"
-    volumes:
-      - ./conf/signoz/clickhouse/config.xml:/etc/clickhouse-server/config.xml
-      - ./conf/signoz/clickhouse/users.xml:/etc/clickhouse-server/users.xml
-      - ./conf/signoz/clickhouse/custom-function.xml:/etc/clickhouse-server/custom-function.xml
-      - ./conf/signoz/clickhouse/cluster.xml:/etc/clickhouse-server/config.d/cluster.xml
-      - ./conf/signoz/clickhouse/user_scripts:/var/lib/clickhouse/user_scripts/
-      - ./__internal/clickhouse:/var/lib/clickhouse/
-    healthcheck:
-      test: wget --no-verbose --tries=1 --spider http://localhost:8123/ping || exit 1
-      interval: 30s
-      timeout: 5s
-      retries: 3
-    environment:
-      - CLICKHOUSE_SKIP_USER_SETUP=1
-    deploy:
-      resources:
-        limits:
-          memory: 2G
-        reservations:
-          memory: 512M
+      - surrealdb
 
-  schema-migrator-sync:
-    image: signoz/signoz-schema-migrator:v0.129.12
-    container_name: signoz-schema-migrator-sync
-    command:
-      - sync
-      - --dsn=tcp://clickhouse:9000
-      - --up=
-    depends_on:
-      clickhouse:
-        condition: service_healthy
-    restart: on-failure
-
-  signoz:
-    image: signoz/signoz:v0.104.0
-    container_name: signoz-standalone
-    command:
-      - --config=/root/config/prometheus.yml
-    ports:
-      - "6607:8080" # SigNoz UI
-    volumes:
-      - ./conf/signoz/prometheus.yml:/root/config/prometheus.yml
-      - ./conf/signoz/dashboards:/root/config/dashboards
-      - ./__internal/signoz:/var/lib/signoz/
-    environment:
-      - SIGNOZ_ALERTMANAGER_PROVIDER=signoz
-      - SIGNOZ_TELEMETRYSTORE_CLICKHOUSE_DSN=tcp://clickhouse:9000
-      - SIGNOZ_SQLSTORE_SQLITE_PATH=/var/lib/signoz/signoz.db
-      - DASHBOARDS_PATH=/root/config/dashboards
-      - STORAGE=clickhouse
-      - GODEBUG=netdns=go
-      - TELEMETRY_ENABLED=true
-      - DEPLOYMENT_TYPE=docker-standalone-amd
-    depends_on:
-      clickhouse:
-        condition: service_healthy
-      schema-migrator-sync:
-        condition: service_completed_successfully
-    healthcheck:
-      test: ["CMD", "wget", "--spider", "-q", "http://localhost:8080/api/v1/health"]
-      interval: 30s
-      timeout: 5s
-      retries: 3
-    deploy:
-      resources:
-        limits:
-          memory: 1G
-        reservations:
-          memory: 256M
-
-  otel-collector:
-    image: signoz/signoz-otel-collector:v0.129.12
-    container_name: signoz-otel-collector
-    command:
-      - --config=/etc/otel-collector-config.yaml
-      - --manager-config=/etc/manager-config.yaml
-      - --copy-path=/var/tmp/collector-config.yaml
-      - --feature-gates=-pkg.translator.prometheus.NormalizeName
-    volumes:
-      - ./conf/signoz/otel-collector-config.yaml:/etc/otel-collector-config.yaml
-      - ./conf/signoz/otel-collector-opamp-config.yaml:/etc/manager-config.yaml
-      - /:/hostfs:ro
-      - /var/run/docker.sock:/var/run/docker.sock:ro
-    environment:
-      - OTEL_RESOURCE_ATTRIBUTES=host.name=signoz-host,os.type=linux
-      - LOW_CARDINAL_EXCEPTION_GROUPING=false
-    ports:
-      - "4317:4317"
-      - "4318:4318"
-    depends_on:
-      signoz:
-        condition: service_healthy
-    deploy:
-      resources:
-        limits:
-          memory: 1G
-        reservations:
-          memory: 128M
-
-  marimo:
+  surrealdb:
+    container_name: "surrealdb"
+    image: localhost/lab_surrealdb:latest
     build:
-      context: ./conf/marimo
-    image: localhost/marimo:latest
-    container_name: marimo
-    working_dir: /app
-    env_file:
-      - env/db.env
+      context: ./conf/surrealdb
+      dockerfile: Dockerfile
+    secrets:
+      - surrealdb_root_pass
+      - surrealdb_backend_user_pass
     ports:
-      - "6608:2718"
-    volumes:
-      - ./marimo:/app
-    environment:
-      - MARIMO_SKIP_UPDATE_CHECK=1
-    restart: unless-stopped
+      - "6800:6800"
+      - "8200:8000"
     healthcheck:
-      test: ["CMD", "curl", "-f", "http://localhost:2718/health"]
-      interval: 30s
-      timeout: 5s
-      retries: 3
+      interval: 10s
+      retries: 10
+      test: ["CMD-SHELL", "curl -sSf http://localhost:6800/health || exit 1"]
+      timeout: 2s
+    restart: always
+    volumes:
+      - "./__internal/surrealdb:/surrealdb/data:z"
+
+  garage:
+    image: docker.io/dxflrs/garage:v2.3.0
+    container_name: garage
+    env_file:
+      - env/garage.env
+    command: /garage server --single-node --default-bucket
+    ports:
+      - "3900:3900" # S3 API
+      - "3902:3902" # S3 Web
+      - "3903:3903" # Admin API
+    volumes:
+      - ./conf/garage/garage.toml:/etc/garage.toml:ro,z
+      - ./__internal/garage/meta:/var/lib/garage/meta:z
+      - ./__internal/garage/data:/var/lib/garage/data:z
+    restart: unless-stopped
     deploy:
       resources:
         limits:
-          memory: 2G
+          memory: 512M
         reservations:
-          memory: 256M
+          memory: 128M
+
+  imgproxy:
+    image: docker.io/darthsim/imgproxy:latest
+    container_name: imgproxy
+    restart: unless-stopped
+    expose:
+      - 8080
+    depends_on:
+      garage:
+        condition: service_started
+    env_file:
+      - env/imgproxy.env
+    healthcheck:
+      test: ["CMD", "imgproxy", "health"]
+      interval: 10s
+      timeout: 3s
+      retries: 3
+
+  oxicloud-db:
+    image: docker.io/library/postgres:17-alpine
+    container_name: oxicloud-db
+    restart: unless-stopped
+    env_file:
+      - env/oxicloud-db.env
+    volumes:
+      - ./__internal/oxicloud-db:/var/lib/postgresql/data:z
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U oxicloud"]
+      interval: 5s
+      timeout: 5s
+      retries: 5
+
+  oxicloud:
+    image: docker.io/diocrafts/oxicloud:latest
+    container_name: oxicloud
+    restart: unless-stopped
+    expose:
+      - 8086
+    depends_on:
+      oxicloud-db:
+        condition: service_healthy
+      garage:
+        condition: service_started
+    env_file:
+      - env/oxicloud.env
+    volumes:
+      - ./__internal/oxicloud:/app/storage:z
+    healthcheck:
+      test: ["CMD-SHELL", "wget -qO- http://127.0.0.1:8086/ready || exit 1"]
+      interval: 30s
+      timeout: 5s
+      start_period: 20s
+      retries: 3
+
+secrets:
+  surrealdb_root_pass:
+    file: "conf/surrealdb/surrealdb_root_pass.txt"
+  surrealdb_backend_user_pass:
+    file: "conf/surrealdb/surrealdb_backend_user_pass.txt"

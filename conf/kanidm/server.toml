@@ -1,0 +1,19 @@
+# The domain name Kanidm will manage
+domain = "idm.localhost"
+
+# The public URL accessed via Pingora/Pingap (Port 8000)
+origin = "http://idm.localhost:8000"
+
+bindaddress = "0.0.0.0:8443"
+ldapbindaddress = "0.0.0.0:3636"
+
+db_path = "/data/kanidm.db"
+tls_chain = "/certs/chain.pem"
+tls_key = "/certs/key.pem"
+
+log_level = "info"
+
+# Allows running behind HTTP reverse proxies for local development
+[online_backup]
+path = "/data/backups"
+schedule = "0 0 22 * * *"

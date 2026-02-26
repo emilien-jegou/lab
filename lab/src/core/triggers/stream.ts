@@ -1,35 +1,27 @@
-import { Effect, Schema, Stream, Schedule, Queue } from "effect"
-import { Trigger } from "./base"
+import { Effect, Schema, Stream, Schedule } from 'effect';
 
-export class StreamTrigger<I, E, R> extends Trigger<I, E, R> {
-  readonly _tag = "Stream"
+import * as Base from './base';
 
-  constructor(
-    readonly streamName: string,
-    readonly source: Stream.Stream<unknown, E, R>,
-    readonly payloadSchema: Schema.Schema<I, any, any> = Schema.Any as any
-  ) {
-    super()
-  }
-
-  get meta() {
-    return { streamName: this.streamName }
-  }
-
-  schema<NewI>(newSchema: Schema.Schema<NewI, any, any>): StreamTrigger<NewI, E, R> {
-    return new StreamTrigger(this.streamName, this.source, newSchema)
-  }
-
-  protected load(queue: Queue.Queue<unknown>) {
-    return Stream.runForEach(this.source, (item) => queue.offer(item)).pipe(
-      Effect.tapErrorCause(c => Effect.logError(`[Stream Ingress] Crashed -> ${this.streamName}`, c)),
-      Effect.retry(Schedule.spaced("1 second"))
-    )
-  }
+export interface StreamTriggerDef<I, E, R> extends Base.Trigger<I, E, R> {
+  readonly schema: <NewI>(newSchema: Schema.Schema<NewI, any, any>) => StreamTriggerDef<NewI, E, R>;
 }
 
-export const stream = <I, E, R>(
+export const stream = <I = unknown, E = never, R = never>(
   streamName: string,
   source: Stream.Stream<unknown, E, R>,
-  schema?: Schema.Schema<I, any, any>
-) => new StreamTrigger(streamName, source, schema)
+  payloadSchema: Schema.Schema<I, any, any> = Schema.Any as any,
+): StreamTriggerDef<I, E, R> => {
+  const producer = Effect.gen(function*() {
+    const queue = yield* Base.TriggerQueue; // Yielded queue service
+
+    yield* Stream.runForEach(source, (item) => queue.offer(item)).pipe(
+      Effect.tapErrorCause((c) => Effect.logError(`[Stream Ingress] Crashed -> ${streamName}`, c)),
+      Effect.retry(Schedule.spaced('1 second')),
+    );
+  });
+
+  return {
+    ...Base.make('Stream', { streamName }, payloadSchema, producer),
+    schema: (newSchema) => stream(streamName, source, newSchema),
+  };
+};

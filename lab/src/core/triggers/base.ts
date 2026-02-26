@@ -1,96 +1,153 @@
-import { Effect, Schema, Stream, ParseResult, Queue, Layer } from "effect"
-import { WorkflowTracker } from "../system/tracker"
-import { FrameworkConfig } from "../system/config"
-import { ModuleContext } from "../system/module"
+import { Effect, Schema, ParseResult, Layer, Context } from 'effect';
+
+import { FrameworkConfig } from '../system/config';
+import { ModuleContext } from '../system/module';
+import { CentralQueue, WorkerConfig } from '../system/worker';
 
 export type Executable<I, A, E, R> = {
-  readonly execute: (payload: I) => Effect.Effect<A, E, R>
-}
+  readonly execute: (payload: I) => Effect.Effect<A, E, R>;
+};
 
 export type TriggerHandler<I, A, E, R> =
   | ((payload: I) => Effect.Effect<A, E, R>)
-  | Executable<I, A, E, R>
+  | Executable<I, A, E, R>;
 
-export abstract class Trigger<Payload, E, R> {
-  abstract readonly _tag: string
-  abstract readonly meta: Record<string, unknown>
-  abstract readonly payloadSchema: Schema.Schema<Payload, any, any>
+export class TriggerQueue extends Context.Tag('system/TriggerQueue')<
+  TriggerQueue,
+  { readonly offer: (payload: unknown) => Effect.Effect<void> }
+>() { }
 
-  protected abstract load(queue: Queue.Queue<unknown>): Effect.Effect<void, E, R>
+export interface Trigger<Payload, E, R> {
+  readonly _tag: string;
+  readonly meta: Record<string, unknown>;
+  readonly payloadSchema: Schema.Schema<Payload, any, any>;
+  readonly producer: Effect.Effect<void, E, R | TriggerQueue>;
+  readonly triggerName?: string;
+  readonly triggerDescription?: string;
+  readonly targetGroup: string;
 
-  // Updated to use unwrapEffect
-  bind<A, HE, HR>(
-    handler: TriggerHandler<Payload, A, HE, HR>
-  ): Layer.Layer<never, E | HE | ParseResult.ParseError, R | HR | FrameworkConfig | ModuleContext> {
-    return Layer.unwrapEffect(
-      Effect.gen(this, function*() {
-        const moduleCtx = yield* ModuleContext
-        return this.bindAsLayer(moduleCtx.id, handler)
-      })
-    )
-  }
+  readonly name: (name: string) => Trigger<Payload, E, R>;
+  readonly describe: (description: string) => Trigger<Payload, E, R>;
+  readonly workerGroup: (group: string) => Trigger<Payload, E, R>;
 
-  bindAsLayer<A, HE, HR>(
+  readonly bind: <A, HE, HR>(
+    handler: TriggerHandler<Payload, A, HE, HR>,
+  ) => Layer.Layer<
+    never,
+    E | HE | ParseResult.ParseError,
+    R | Exclude<HR, WorkerConfig> | FrameworkConfig | ModuleContext | CentralQueue
+  >;
+
+  readonly bindAsLayer: <A, HE, HR>(
     moduleId: string,
     handler: TriggerHandler<Payload, A, HE, HR>,
-  ): Layer.Layer<never, E | HE | ParseResult.ParseError, R | HR | FrameworkConfig> {
+  ) => Layer.Layer<
+    never,
+    E | HE | ParseResult.ParseError,
+    R | Exclude<HR, WorkerConfig> | FrameworkConfig | CentralQueue
+  >;
+}
+
+export const make = <Payload, E, R>(
+  _tag: string,
+  meta: Record<string, unknown>,
+  payloadSchema: Schema.Schema<Payload, any, any>,
+  producer: Effect.Effect<void, E, R | TriggerQueue>,
+  triggerName?: string,
+  triggerDescription?: string,
+  targetGroup: string = 'default',
+): Trigger<Payload, E, R> => ({
+  _tag,
+  meta,
+  payloadSchema,
+  producer,
+  triggerName,
+  triggerDescription,
+  targetGroup,
+
+  name(name: string) {
+    return make(_tag, meta, payloadSchema, producer, name, triggerDescription, targetGroup);
+  },
+
+  describe(description: string) {
+    return make(_tag, meta, payloadSchema, producer, triggerName, description, targetGroup);
+  },
+
+  workerGroup(group: string) {
+    return make(_tag, meta, payloadSchema, producer, triggerName, triggerDescription, group);
+  },
+
+  bind<A, HE, HR>(handler: TriggerHandler<Payload, A, HE, HR>) {
+    return Layer.unwrapEffect(
+      Effect.gen(this, function*() {
+        const moduleCtx = yield* ModuleContext;
+        return this.bindAsLayer(moduleCtx.id, handler);
+      }),
+    );
+  },
+
+  bindAsLayer<A, HE, HR>(moduleId: string, handler: TriggerHandler<Payload, A, HE, HR>) {
     return Layer.scopedDiscard(
       Effect.gen(this, function*() {
-        const configOpt = yield* Effect.serviceOption(FrameworkConfig)
-        if (configOpt._tag === "Some") {
-          yield* configOpt.value.registerTrigger(moduleId, this._tag, this.meta)
+        const configOpt = yield* Effect.serviceOption(FrameworkConfig);
+        const centralQueue = yield* CentralQueue;
+
+        const context = yield* Effect.context<HR>();
+
+        if (configOpt._tag === 'Some') {
+          yield* configOpt.value.registerTrigger({
+            moduleId,
+            type: this._tag,
+            // Tuck targetGroup safely into meta
+            meta: { ...this.meta, targetGroup: this.targetGroup },
+            name: this.triggerName,
+            description: this.triggerDescription,
+            payloadSchema: this.payloadSchema,
+          });
         }
 
-        yield* Effect.logInfo(`[Trigger] Booting ${this._tag}...`).pipe(
-          Effect.annotateLogs({ ...this.meta, moduleId })
-        )
-
-        const queue = yield* Queue.unbounded<unknown>()
-        yield* Effect.forkScoped(
-          this.load(queue).pipe(
-            Effect.catchAllCause((c) =>
-              Effect.logError(`[Trigger Producer Crashed] ${this._tag}`, c)
-            )
-          )
-        )
-
-        const stream = Stream.fromQueue(queue)
-        yield* Stream.runForEach(stream, (raw) =>
-          Effect.gen(this, function*() {
-            const payload = yield* Schema.decodeUnknown(this.payloadSchema)(raw).pipe(
-              Effect.catchAllCause((c) => Effect.die(c))
-            )
-
-            const effect = typeof handler === "function" ? handler(payload) : handler.execute(payload)
-            const trackerOpt = yield* Effect.serviceOption(WorkflowTracker)
-
-            const pipeline =
-              trackerOpt._tag === "None"
-                ? effect
-                : Effect.gen(this, function*() {
-                  const runId = yield* trackerOpt.value.start(this._tag, this.meta, payload)
-                  return yield* effect.pipe(
-                    Effect.tapErrorCause((c) => trackerOpt.value.fail(runId, c)),
-                    Effect.tap(() => trackerOpt.value.complete(runId))
-                  )
-                })
-
-            yield* pipeline.pipe(
-              Effect.catchAllCause((c) =>
-                Effect.logError(`[Trigger Worker Failed] ${this._tag}`, c)
-              ),
-              Effect.fork
-            )
-          })
+        yield* Effect.logInfo(
+          `[Trigger] Booting ${this._tag} -> Queue: [${this.targetGroup}]`,
         ).pipe(
-          Effect.catchAllCause((c) =>
-            Effect.logError(`[Trigger Consumer Crashed] ${this._tag}`, c)
-          ),
-          Effect.forkScoped
-        )
+          Effect.annotateLogs({
+            ...this.meta,
+            moduleId,
+            triggerName: this.triggerName ?? '',
+            workerGroup: this.targetGroup,
+          }),
+        );
 
-        yield* Effect.logInfo(`[Trigger] ${this._tag} successfully started.`)
-      })
-    )
-  }
-}
+        const localQueue = TriggerQueue.of({
+          offer: (rawPayload) =>
+            centralQueue.offer({
+              moduleId,
+              triggerType: this._tag,
+              triggerName: this.triggerName,
+              meta: this.meta,
+              payloadSchema: this.payloadSchema,
+              rawPayload,
+              handler,
+              context,
+              targetGroup: this.targetGroup,
+            }),
+        });
+
+        const producerEffect = Effect.provideService(this.producer, TriggerQueue, localQueue);
+
+        yield* Effect.forkScoped(
+          producerEffect.pipe(
+            Effect.catchAllCause((c) =>
+              Effect.logError(`[Trigger Producer Crashed] ${this._tag}`, c),
+            ),
+          ),
+        );
+
+        yield* Effect.logInfo(`[Trigger] ${this._tag} successfully started.`);
+      }),
+    ) as Layer.Layer<
+      never,
+      E | HE | ParseResult.ParseError,
+      R | Exclude<HR, WorkerConfig> | FrameworkConfig | CentralQueue
+    >;
+  },
+});
